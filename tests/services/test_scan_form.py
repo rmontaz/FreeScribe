@@ -119,14 +119,14 @@ def test_unreadable_image():
 
 @pytest.mark.parametrize("word, fixed", [
     ("Patent", "Patient"), ("Chnician", "Clinician"), ("Heaith", "Health"), ("SIGNATURF", "SIGNATURE"),
-    ("Glucese,", "Glucose,"), ("Smith", "Smith"), ("Montreal", "Montreal"), ("cec", "cec"), ("name", "name"),
+    ("Glucese,", "Glucose,"), ("week", "week"), ("weeks", "weeks"), ("result", "result"), ("Smith", "Smith"), ("Montreal", "Montreal"), ("cec", "cec"), ("name", "name"),
 ])
 def test_respell(word, fixed):
     assert scan_form.respell(word) == fixed
 
 
 def test_box_readings_are_not_text():
-    for reading in ("CJ", "LJ", "CL]", "O", "[]", "0"):
+    for reading in ("CJ", "LJ", "CL]", "O", "[]", "0", "(TJ"):
         assert not scan_form._is_text(reading)
     for word in ("No", "Yes", "CBC", "TSH", "Other"):
         assert scan_form._is_text(word)

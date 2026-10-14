@@ -362,7 +362,7 @@ def _on_rect_edge(line, rects, horizontal: bool, tol: float = 2.0) -> bool:
                for r in rects)
 
 
-_BOX_READING = re.compile(r"[LJCOoDUIl0\[\]|()©®@{}]{1,3}")
+_BOX_READING = re.compile(r"[LJCOoDUIlT0\[\]|()©®@{}]{1,3}")
 
 
 _FORM_WORDS = None
@@ -399,6 +399,8 @@ def respell(word: str) -> str:
     options = difflib.get_close_matches(lower, vocabulary, n=2, cutoff=cutoff)
     if not options:
         return word
+    if options[0] in (lower + "s", lower + "es") or lower in (options[0] + "s", options[0] + "es"):
+        return word                 # only singular and plural differ ("week", "weeks")
     ratios = [difflib.SequenceMatcher(None, lower, option).ratio() for option in options]
     if len(options) > 1 and ratios[1] >= ratios[0] - 0.02:
         return word                 # two words fit about as well; do not guess
