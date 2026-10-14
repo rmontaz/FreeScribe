@@ -8,6 +8,10 @@
 ; Define the name of the installer
 OutFile "..\dist\FreeScribeInstaller.exe"
 
+; Build-time options (makensis /D...):
+; /DCPU_ONLY    - installer contains only the CPU build (no architecture page)
+; /DNVIDIA_ONLY - installer contains only the NVIDIA build (no architecture page)
+
 ; Silent mode flags:
 ; /S - Silent mode
 ; /ARCH=[CPU|NVIDIA] - Force architecture selection
@@ -150,6 +154,14 @@ FunctionEnd
 ; Function to create a custom page with CPU/NVIDIA options
 Function ARCHITECTURE_SELECT
     Call Check_For_Old_Version_In_App_Data
+    !ifdef CPU_ONLY
+        StrCpy $SELECTED_OPTION "CPU"
+        Abort ; single-build installer: nothing to choose
+    !endif
+    !ifdef NVIDIA_ONLY
+        StrCpy $SELECTED_OPTION "NVIDIA"
+        Abort
+    !endif
     !insertmacro MUI_HEADER_TEXT "Architecture Selection" "Choose your preferred installation architecture based on your hardware"
 
     nsDialogs::Create 1018
@@ -510,19 +522,30 @@ Section "MainSection" SEC01
     ; Set output path to the installation directory
     SetOutPath "$INSTDIR"
 
+    !ifdef CPU_ONLY
+        StrCpy $SELECTED_OPTION "CPU"
+    !endif
+    !ifdef NVIDIA_ONLY
+        StrCpy $SELECTED_OPTION "NVIDIA"
+    !endif
+
+    !ifndef NVIDIA_ONLY
     ${If} $SELECTED_OPTION == "CPU"
         ; Add files to the installer
         File /r "..\dist\freescribe-client-cpu\freescribe-client-cpu.exe"
         Rename "$INSTDIR\freescribe-client-cpu.exe" "$INSTDIR\freescribe-client.exe"
         File /r "..\dist\freescribe-client-cpu\_internal"
     ${EndIf}
+    !endif
 
+    !ifndef CPU_ONLY
     ${If} $SELECTED_OPTION == "NVIDIA"
         ; Add files to the installer
         File /r "..\dist\freescribe-client-nvidia\freescribe-client-nvidia.exe"
         Rename "$INSTDIR\freescribe-client-nvidia.exe" "$INSTDIR\freescribe-client.exe"
         File /r "..\dist\freescribe-client-nvidia\_internal"
     ${EndIf}
+    !endif
 
     ; Install version file to both nvidia and cpu directories for version checking
     SetOutPath "$INSTDIR\_internal"

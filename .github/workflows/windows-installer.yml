@@ -1,0 +1,73 @@
+name: Windows Installer (single build)
+
+# Builds a Windows installer containing one variant only.
+#   git tag win-cpu-<version>    && git push <remote> win-cpu-<version>
+#   git tag win-nvidia-<version> && git push <remote> win-nvidia-<version>
+
+on:
+  push:
+    tags:
+      - "win-cpu-*"
+      - "win-nvidia-*"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 240
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Choose variant
+        id: variant
+        shell: pwsh
+        run: |
+          $tag = '${{ github.ref_name }}'
+          if ($tag -like 'win-nvidia-*') { $v = 'nvidia'; $def = '/DNVIDIA_ONLY' } else { $v = 'cpu'; $def = '/DCPU_ONLY' }
+          echo "name=$v" >> $env:GITHUB_OUTPUT
+          echo "define=$def" >> $env:GITHUB_OUTPUT
+          $tag -replace '^win-(cpu|nvidia)-', '' | Out-File -Encoding ascii -NoNewline .\scripts\__version__
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          architecture: "x64"
+
+      - name: Install llama_cpp (CUDA)
+        if: steps.variant.outputs.name == 'nvidia'
+        run: |
+          pip install --index-url https://abetlen.github.io/llama-cpp-python/whl/cu124 --extra-index-url https://pypi.org/simple llama-cpp-python==v0.3.8
+          pip install nvidia-cudnn-cu12==9.5.0.50 nvidia-cuda-runtime-cu12==12.4.127 nvidia-cuda-nvrtc-cu12==12.4.127 nvidia-cublas-cu12==12.4.5.8
+
+      - name: Install requirements
+        run: pip install -r client_requirements.txt
+
+      - name: Run PyInstaller (CPU)
+        if: steps.variant.outputs.name == 'cpu'
+        run: |
+          pyinstaller --runtime-hook=.\scripts\runtime_hooks\hook-runtime.py --additional-hooks-dir=.\scripts\hooks --hidden-import=en_core_web_md --hidden-import=en_core_sci_md --add-data ".\scripts\CPU_INSTALL.txt:install_state" --add-data ".\src\FreeScribe.client\whisper-assets:faster_whisper\assets" --add-data ".\src\FreeScribe.client\markdown:markdown" --add-data ".\src\FreeScribe.client\assets:assets" --name freescribe-client-cpu --icon=.\src\FreeScribe.client\assets\logo.ico --noconsole .\src\FreeScribe.client\client.py
+
+      - name: Run PyInstaller (NVIDIA)
+        if: steps.variant.outputs.name == 'nvidia'
+        shell: pwsh
+        run: |
+          $nvidia = python -c "import nvidia; print(list(nvidia.__path__)[0])"
+          pyinstaller --runtime-hook=.\scripts\runtime_hooks\hook-runtime.py --additional-hooks-dir=.\scripts\hooks --hidden-import=en_core_web_md --hidden-import=en_core_sci_md --add-data ".\scripts\NVIDIA_INSTALL.txt:install_state" --add-data ".\src\FreeScribe.client\whisper-assets:faster_whisper\assets" --add-data ".\src\FreeScribe.client\markdown:markdown" --add-data ".\src\FreeScribe.client\assets:assets" --add-data "${nvidia}:nvidia-drivers" --name freescribe-client-nvidia --icon=.\src\FreeScribe.client\assets\logo.ico --noconsole .\src\FreeScribe.client\client.py
+
+      - name: Build installer
+        uses: joncloud/makensis-action@1c9f4bf2ea0c771147db31a2f3a7f5d8705c0105
+        with:
+          script-file: .\scripts\install.nsi
+          additional-plugin-paths: "./scripts/nsis-plugins"
+          arguments: ${{ steps.variant.outputs.define }}
+
+      - name: Rename installer
+        shell: pwsh
+        run: Move-Item dist\FreeScribeInstaller.exe "dist\FreeScribeInstaller_windows_${{ steps.variant.outputs.name }}.exe"
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FreeScribeInstaller_windows_${{ steps.variant.outputs.name }}.exe
+          path: dist/FreeScribeInstaller_windows_${{ steps.variant.outputs.name }}.exe
