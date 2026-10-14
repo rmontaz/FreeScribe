@@ -2029,6 +2029,46 @@ def _show_form_review(prepared, values, session_title):
                    on_saved=on_saved, fill_path=prepared.fill_path, converted=prepared.converted)
 
 
+# The bundled OSCAR eForm Mapper, served on this computer only while FreeScribe runs
+eform_mapper_server = None
+
+
+def _detect_eform_fields(payload):
+    from services import eform_mapping
+    return eform_mapping.detect(payload)
+
+
+def open_eform_mapper():
+    """Opens the bundled OSCAR eForm Mapper in the web browser, connected to FreeScribe."""
+    global eform_mapper_server
+    mapper_dir = get_file_path('assets', 'eform_mapper')
+    if not os.path.isfile(os.path.join(mapper_dir, 'eform_mapper.html')):
+        messagebox.showinfo("eForm mapper", "The eForm mapper is not included in this copy of FreeScribe.")
+        return
+    try:
+        if eform_mapper_server is None:
+            from services.mapper_server import MapperServer
+            try:
+                from services.eform_mapping import MappingError
+                user_errors = (MappingError,)
+            except ImportError:      # PyMuPDF missing: the mapper still works, without "Find fields from PDF"
+                user_errors = ()
+            eform_mapper_server = MapperServer(
+                mapper_dir, {"/api/detect": _detect_eform_fields},
+                status=lambda: {"version": get_application_version()},
+                user_errors=user_errors)
+        url = eform_mapper_server.start()
+    except Exception as e:
+        logger.exception(f"Could not start the eForm mapper: {e}")
+        messagebox.showerror("eForm mapper", f"The eForm mapper could not be started.\n\n{e}")
+        return
+    import webbrowser
+    if not webbrowser.open(url):
+        messagebox.showinfo("eForm mapper", f"Open this address in your web browser:\n\n{url}")
+    else:
+        workspace.toast("eForm mapper opened in your browser")
+
+
 def upload_file():
     global uploaded_file_path
     file_path = filedialog.askopenfilename(filetypes=(("Audio files", "*.wav *.mp3 *.m4a"),))
@@ -2287,6 +2327,7 @@ workspace = Workspace(
         "ask": ask_assistant,
         "generate_document": generate_document,
         "fill_form": fill_form,
+        "open_eform_mapper": open_eform_mapper,
         "toggle_view": toggle_view,
         "open_settings": window.open_settings,
         "help_guide": window.open_help_guide,

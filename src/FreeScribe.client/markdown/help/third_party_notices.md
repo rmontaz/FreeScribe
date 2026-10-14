@@ -28,6 +28,19 @@ Used to find the blanks on flat PDF forms and add form fields to them. PyMuPDF v
 
 PyMuPDF and the MuPDF library it includes are dual-licensed by Artifex Software, Inc. FreeScribe uses them under the GNU Affero General Public License v3.0, the same licence as FreeScribe itself. Their complete source code is available from the link above and from [mupdf.com](https://mupdf.com). MuPDF in turn includes third-party libraries under their own licences, which are listed in its source distribution.
 
+## OSCAR eForm Mapper
+
+The eForm mapper that opens from FreeScribe's sidebar is the OSCAR eForm Mapper (eForm Generator, Standalone v19), Copyright (c) 2026 the eForm Generator author(s), released under the MIT License. FreeScribe's copy adds the "Find fields from PDF" connection; the rest is unchanged. Its files are in `assets/eform_mapper/`:
+
+* `LICENSE.txt`: the mapper's MIT License
+* `eForm_Generator_ATTRIBUTIONS.md`: the mapper's own list of the components it uses and the ones its exported eForms use (jQuery, OSCAR EMR conventions)
+
+The mapper uses these libraries, kept in `assets/eform_mapper/vendor/` with their licence files:
+
+* **PDF.js** 3.11.174, Copyright (c) Mozilla Foundation and contributors, Apache License 2.0 (`vendor/LICENSE-pdfjs.txt`)
+* **PDF.js standard fonts** from pdfjs-dist 3.11.174, used to draw symbol-font characters such as tick boxes: Foxit fonts, Copyright 2014 PDFium Authors, BSD 3-Clause License (`vendor/standard_fonts/LICENSE_FOXIT`); Liberation Sans, Copyright (c) 2010 Google Corporation and (c) 2012 Red Hat, Inc., SIL Open Font License 1.1 (`vendor/standard_fonts/LICENSE_LIBERATION`)
+* **JSZip** 3.10.1, Copyright (c) 2009-2016 Stuart Knightley, David Duponchel, Franz Buchinger, António Afonso, dual-licensed MIT or GPL-3.0 and used under the MIT License (`vendor/LICENSE-jszip.md`)
+
 ## Development tools
 
 The following are used only to generate the test PDFs in `tests/fixtures`, and are not part of the FreeScribe application:

@@ -280,6 +280,12 @@ class Workspace:
 
         nav = tk.Frame(footer, bg=bg)
         nav.pack(fill="x", padx=Theme.px(8), pady=(Theme.px(8), Theme.px(2)))
+        if "open_eform_mapper" in self.actions:
+            self.mapper_button = Button(nav, text="eForm mapper", icon_name="doc", variant="ghost-strong", size="sm",
+                                        stretch=True, align="left", surface=bg,
+                                        tooltip="Map an OSCAR eForm from a PDF, in your web browser",
+                                        command=lambda: self._act("open_eform_mapper"))
+            self.mapper_button.pack(fill="x")
         self.settings_button = Button(nav, text="Settings", icon_name="settings", variant="ghost-strong", size="sm",
                                       stretch=True, align="left", surface=bg,
                                       command=lambda: self._act("open_settings"))

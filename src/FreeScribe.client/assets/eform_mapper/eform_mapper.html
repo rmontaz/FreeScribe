@@ -1,0 +1,3380 @@
+<!doctype html>
+<!--
+  OSCAR eForm Mapper (eForm Generator) - Standalone v19
+  Copyright (c) 2026 the eForm Generator author(s)
+  Licensed under the MIT License - see LICENSE.txt in this folder.
+
+  Third-party components (full list: eForm_Generator_ATTRIBUTIONS.md):
+    - PDF.js 3.11.174  (c) Mozilla Foundation - Apache-2.0  (vendor/pdf.min.js, vendor/pdf.worker.min.js)
+    - JSZip 3.10.1     (c) Stuart Knightley et al. - MIT (dual MIT/GPL-3.0) (vendor/jszip.min.js)
+    - Exported eForms reference jQuery (MIT, (c) OpenJS Foundation) and OSCAR EMR's
+      faxControl.js (GPL-2.0); export template patterns adapted from OSCAR community eForms.
+  Libraries load from ./vendor/ first and fall back to cdnjs (SRI-pinned) if absent.
+
+  Bundled with FreeScribe: this copy adds a "Find fields from PDF" button that
+  appears when FreeScribe opens the page (look for "FreeScribe connection").
+  Everything else is the mapper as written by its author(s); the original is unchanged.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>OSCAR eForm Mapper (Standalone v19 + FreeScribe)</title>
+<style>
+  :root{
+    --bg:#f6f8fb; --card:#fff; --line:#d9e1ea; --text:#1f2937; --muted:#6b7280;
+    --blue:#2563eb; --green:#059669; --violet:#7c3aed; --amber:#d97706; --red:#dc2626;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);font-family:Inter,Segoe UI,Arial,sans-serif;color:var(--text)}
+
+  /* Independent scrolling panes for mapper + customization */
+  .pane{min-height:0}
+  @media (min-width: 1024px){
+    body{overflow:hidden}
+    .wrap{height:calc(100vh - 20px);max-height:calc(100vh - 20px)}
+    .pane{height:100%;overflow:auto;scrollbar-gutter:stable both-edges}
+    .pane-left,.pane-right{padding-bottom:28px}
+  }
+  @media (max-width: 1023px){
+    body{overflow:auto}
+  }
+  .wrap{max-width:1500px;margin:16px auto;padding:0 12px;display:grid;grid-template-columns:1.6fr 1fr;gap:12px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px}
+  h1{margin:0 0 4px;font-size:22px}
+  .muted{color:var(--muted);font-size:13px}
+  .row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+  button,.btn{
+    border:1px solid #cfd8e3;background:#fff;padding:8px 10px;border-radius:9px;cursor:pointer;
+    font-size:13px;
+  }
+  button:hover,.btn:hover{filter:brightness(.98)}
+  .btn-blue{background:var(--blue);border-color:var(--blue);color:#fff}
+  .btn-green{background:var(--green);border-color:var(--green);color:#fff}
+  .btn-violet{background:var(--violet);border-color:var(--violet);color:#fff}
+  .btn-amber{background:var(--amber);border-color:var(--amber);color:#fff}
+  .btn-red{background:var(--red);border-color:var(--red);color:#fff}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  .split{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .panel-title{font-weight:700;font-size:14px;margin-bottom:6px}
+  .pill{display:inline-block;border:1px solid var(--line);padding:2px 7px;border-radius:999px;font-size:11px;background:#f8fbff}
+  .canvas-wrap{
+    margin-top:10px;border:2px solid #cad5e3;border-radius:10px;overflow:visible;background:#fff;
+    position:relative; display:inline-block; max-width:100%;
+  }
+  .canvas-wrap img{display:block;max-width:100%;height:auto;user-select:none;pointer-events:none}
+  .overlay{position:absolute;left:0;top:0;right:0;bottom:0;touch-action:none}
+  .field{
+    position:absolute;border:2px solid #10b981;background:rgba(16,185,129,.16);
+    cursor:move; user-select:none; pointer-events:auto;
+  }
+  .field.selected{border-color:#2563eb;background:rgba(37,99,235,.18)}
+  .field-label{
+    position:absolute;left:0;top:-20px;background:#111827;color:#fff;font-size:11px;
+    border-radius:4px;padding:1px 4px;white-space:nowrap
+  }
+  .resize{
+    position:absolute;width:9px;height:9px;border:1px solid #fff;background:#2563eb;
+  }
+  .resize.se{right:-5px;bottom:-5px;cursor:nwse-resize}
+  .tab{padding:6px 10px;border:1px solid var(--line);border-radius:999px;background:#fff;cursor:pointer;font-size:12px}
+  .tab.active{background:#eef4ff;border-color:#9dbafc}
+  .kvs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;font-size:12px}
+  .kvs>div{background:#f8fbff;border:1px solid var(--line);border-radius:8px;padding:6px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+  label{font-size:12px;color:#374151}
+  input[type=text],input[type=number],select,textarea{
+    width:100%;border:1px solid #cfd8e3;border-radius:8px;padding:7px 8px;font-size:13px;background:#fff
+  }
+  textarea{resize:vertical;min-height:90px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .small{font-size:11px;color:#6b7280}
+  .warn{margin-top:8px;background:#fffbeb;border:1px solid #fcd34d;color:#92400e;border-radius:8px;padding:7px 8px;font-size:12px}
+  .err{margin-top:8px;background:#fef2f2;border:1px solid #fecaca;color:#991b1b;border-radius:8px;padding:7px 8px;font-size:12px}
+  .ok{margin-top:8px;background:#ecfdf5;border:1px solid #a7f3d0;color:#065f46;border-radius:8px;padding:7px 8px;font-size:12px}
+  .list{max-height:220px;overflow:auto;border:1px solid var(--line);border-radius:8px}
+  .list-item{padding:7px 8px;border-bottom:1px solid #eef2f7;font-size:12px}
+  .list-item:last-child{border-bottom:none}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .hr{height:1px;background:var(--line);margin:10px 0}
+
+  .lasso-box{position:absolute;border:1px dashed #2563eb;background:rgba(37,99,235,.12);pointer-events:none;z-index:20}
+  .export-editor{width:100%;min-height:220px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .preview-frame{width:100%;height:260px;border:1px solid var(--line);border-radius:8px;background:#fff}
+
+  .btn-active{background:#dbeafe!important;border-color:#60a5fa!important;color:#1e3a8a!important}
+  #converterPanel.converter-top{background:#eef9d8;border:1px solid #b9e28c;border-radius:12px;padding:10px}
+  #converterPanel.converter-top summary{font-weight:700}
+  #converterTopMount{margin-top:10px}
+  .collapsible-summary{display:flex;align-items:center;gap:8px;cursor:pointer;list-style:none}
+  .collapsible-summary::-webkit-details-marker{display:none}
+  .plus-pill{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:999px;background:#2563eb;color:#fff;font-weight:700;line-height:1}
+  /* v8 visual refresh */
+  body{
+    background:
+      radial-gradient(1200px 700px at -10% -20%, #dbeafe 0%, transparent 60%),
+      radial-gradient(900px 600px at 110% -10%, #dcfce7 0%, transparent 55%),
+      linear-gradient(180deg, #f7faff 0%, #eff4ff 100%);
+    min-height:100vh;
+  }
+  .wrap{max-width:1640px;gap:16px;padding:10px 14px 18px}
+  .card{
+    border:1px solid #d9e6ff;
+    border-radius:16px;
+    padding:14px;
+    box-shadow:0 10px 30px rgba(30,64,175,.08), 0 2px 10px rgba(15,23,42,.06);
+    backdrop-filter: blur(2px);
+  }
+  h1{font-size:26px;letter-spacing:.2px}
+  .muted{font-size:13px;color:#60708d}
+  .panel-title{font-size:14px;letter-spacing:.2px}
+  .pill{
+    background:linear-gradient(180deg,#eef6ff,#e3efff);
+    border-color:#bfd2ff;
+    color:#1e3a8a;
+    font-weight:600;
+  }
+  button,.btn{
+    border:1px solid #c9d8ff;
+    border-radius:11px;
+    padding:8px 12px;
+    background:linear-gradient(180deg,#ffffff,#f2f6ff);
+    color:#1f2a44;
+    box-shadow:0 1px 0 rgba(255,255,255,.85) inset, 0 2px 8px rgba(30,64,175,.09);
+    transition:transform .12s ease, box-shadow .16s ease, filter .16s ease;
+    font-weight:600;
+  }
+  button:hover,.btn:hover{transform:translateY(-1px);box-shadow:0 5px 14px rgba(30,64,175,.14)}
+  button:active,.btn:active{transform:translateY(0)}
+  .btn-blue{background:linear-gradient(180deg,#4f8eff,#3277f6);border-color:#2f71e8;color:#fff}
+  .btn-green{background:linear-gradient(180deg,#34d399,#10b981);border-color:#10b981;color:#fff}
+  .btn-violet{background:linear-gradient(180deg,#8b5cf6,#7c3aed);border-color:#7c3aed;color:#fff}
+  .btn-amber{background:linear-gradient(180deg,#f59e0b,#d97706);border-color:#d97706;color:#fff}
+  .btn-red{background:linear-gradient(180deg,#ef4444,#dc2626);border-color:#dc2626;color:#fff}
+  .btn-small{padding:4px 8px;font-size:12px;border-radius:8px;}
+  .tab{
+    border-radius:999px;
+    border:1px solid #c8d7ff;
+    background:linear-gradient(180deg,#fff,#f3f7ff);
+    font-weight:600;
+  }
+  .tab.active{background:linear-gradient(180deg,#e8f0ff,#dbeafe);border-color:#9fbcff;color:#1e3a8a}
+  .kvs>div{background:linear-gradient(180deg,#fbfdff,#f0f6ff);border-color:#d7e4ff}
+  .canvas-wrap{
+    border:1px solid #c0d3ff;
+    border-radius:14px;
+    box-shadow:inset 0 0 0 1px #edf3ff, 0 12px 28px rgba(30,64,175,.08);
+  }
+  .field{border-width:2px;border-radius:6px}
+  input[type=text],input[type=number],select,textarea{
+    border:1px solid #c6d6ff;
+    border-radius:10px;
+    background:#fbfdff;
+  }
+  input[type=text]:focus,input[type=number]:focus,select:focus,textarea:focus{
+    outline:none;border-color:#7aa2ff;box-shadow:0 0 0 3px rgba(59,130,246,.15)
+  }
+  .list{border-color:#d6e3ff;border-radius:10px;background:#fbfdff}
+  .list-item{border-bottom:1px solid #eaf0ff}
+  .ok{background:#ecfdf5;border-color:#86efac}
+  .warn{background:#fff7ed;border-color:#fdba74}
+  .err{background:#fef2f2;border-color:#fca5a5}
+  #converterPanel.converter-top{
+    background:linear-gradient(180deg,#eefbd8,#e0f7b8);
+    border:1px solid #b4de73;
+    box-shadow:0 10px 18px rgba(101,163,13,.18), inset 0 1px 0 rgba(255,255,255,.55);
+  }
+  #converterPanel.converter-top summary{
+    color:#355a05;
+    font-size:15px;
+  }
+  .plus-pill{
+    background:linear-gradient(180deg,#3b82f6,#2563eb);
+    box-shadow:0 4px 10px rgba(37,99,235,.35);
+  }
+  @media (max-width:1100px){.wrap{grid-template-columns:1fr}}
+  /* Snap alignment guides */
+  .guide-v{
+    position:absolute;top:-4px;bottom:-4px;width:2px;
+    background:#2563eb;
+    box-shadow:0 0 0 1px rgba(255,255,255,.8), 0 0 6px 1px rgba(37,99,235,.6);
+    pointer-events:none;z-index:18;
+  }
+  .guide-h{
+    position:absolute;left:-4px;right:-4px;height:2px;
+    background:#2563eb;
+    box-shadow:0 0 0 1px rgba(255,255,255,.8), 0 0 6px 1px rgba(37,99,235,.6);
+    pointer-events:none;z-index:18;
+  }
+  .guide-dot{
+    position:absolute;width:10px;height:10px;border-radius:50%;
+    background:#fff;border:2.5px solid #2563eb;
+    box-shadow:0 0 0 1px rgba(255,255,255,.6), 0 0 8px 2px rgba(37,99,235,.5);
+    pointer-events:none;z-index:19;
+  }
+
+  /* Preflight result rows */
+  .preflight-list{margin-top:6px;max-height:180px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:6px;background:#fbfdff}
+  .pf-ok{color:#065f46;font-size:12px}
+  .pf-warn{color:#92400e;font-size:12px}
+  .pf-err{color:#991b1b;font-size:12px;font-weight:600}
+
+  /* Quickstart step chips */
+  .quickstart{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+  .step-chip{display:inline-flex;align-items:center;gap:5px;background:linear-gradient(180deg,#f0f6ff,#e5eeff);border:1px solid #c8d8ff;border-radius:999px;padding:3px 10px;font-size:12px;color:#1e3a8a}
+  .step-chip b{background:#2563eb;color:#fff;border-radius:50%;width:17px;height:17px;display:inline-flex;align-items:center;justify-content:center;font-size:11px;flex-shrink:0}
+
+
+  /* FreeScribe connection (added by FreeScribe) */
+  .fs-panel{margin-top:10px;border:1px solid #ddd6fe;background:#f5f3ff;border-radius:10px;padding:8px 10px}
+  .fs-panel[hidden]{display:none}
+  .fs-badge{background:#7c3aed;color:#fff;border-radius:999px;padding:2px 8px;font-size:11px;font-weight:600}
+  .fs-panel select{width:auto;min-width:120px}
+  .fs-panel label{display:inline-flex}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <section class="card pane pane-left">
+    <h1>OSCAR eForm Mapper <span class="pill">Standalone / Offline</span></h1>
+    <div class="muted">Import existing eForm HTMLs for field/tag extraction + fax/print snippets. Supports up to 10 pages, multi-select, local detection, and export.</div>
+
+    <div id="converterTopMount"></div>
+
+    <div class="row" style="margin-top:10px">
+      <span id="uploadButtonsRow"></span>
+      <button id="btnAddPage" class="btn-blue">+ Add Page</button>
+      <button id="btnRemovePage" class="btn-red">&#8722; Remove Last Page</button>
+
+      <button id="btnDetect" class="btn-violet">Auto Detect (Current Page)</button>
+      <button id="btnAdd" class="btn-green">Add Field</button>
+      <button id="btnAddCheckbox" class="btn-green">Place Checkbox</button>
+      <label class="small" style="display:flex;align-items:center;gap:6px">Checkbox px <input id="manualCbSize" type="number" min="6" max="120" value="20" style="width:80px"/></label>
+      <button id="btnDeleteSel" class="btn-red">Delete Selected</button>
+      <button id="btnCopySel">Copy Selected</button>
+      <button id="btnPasteSel">Paste</button>
+      <button id="btnDuplicateSel">Duplicate</button>
+      <button id="btnUndo" title="Undo last action">Undo</button>
+      <button id="btnClearPage">Clear Current Page</button>
+      <button id="btnResetAll" class="btn-red">Reset Everything</button>
+      <button id="btnSaveSession">Save Session</button>
+      <button id="btnLoadSession">Load Session</button>
+      <input id="fileSession" type="file" accept="application/json,.json" hidden />
+      <button id="btnToggleConverter">PDF→Image Tool</button>
+    </div>
+
+    <!-- FreeScribe connection (added by FreeScribe): shown only when FreeScribe opens this page -->
+    <div id="fsPanel" class="fs-panel" hidden>
+      <div class="row" style="align-items:center">
+        <span class="fs-badge">FreeScribe</span><span id="fsStatus" class="small"></span>
+        <button id="btnFsDetect" class="btn-violet" title="FreeScribe reads the PDF itself and places fields exactly where it draws lines, boxes and tick boxes. Works for PDFs made on a computer, not for scans.">Find fields from PDF</button>
+        <select id="fsScope" title="Which mapper pages to fill">
+          <option value="page">This page</option>
+          <option value="all">All pages</option>
+        </select>
+        <label class="small" style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="fsReplace" checked/> Replace fields already there</label>
+      </div>
+      <div class="row small" style="margin-top:6px;align-items:center">
+        <span id="fsPdfName"></span>
+        <button id="btnFsPickPdf" type="button">Choose source PDF&hellip;</button>
+        <input id="fsPdfFile" type="file" accept="application/pdf,.pdf" hidden/>
+      </div>
+      <div class="small" style="margin-top:4px">For scanned forms, keep using Auto Detect.</div>
+    </div>
+
+    <div class="quickstart">
+      <span class="step-chip"><b>1</b> Convert/load PDF images</span>
+      <span class="step-chip"><b>2</b> Detect + adjust fields</span>
+      <span class="step-chip"><b>3</b> Auto-tag / template-match</span>
+      <span class="step-chip"><b>4</b> Run preflight + export</span>
+    </div>
+
+    <div class="row" style="margin-top:8px">
+      <span id="tabsRow"></span>
+      <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="chkLabels" checked /> Show labels</label>
+      <span class="small">Shift/Ctrl/Cmd click = multi-select · Drag blank area = lasso · Arrow keys nudge · Shift+Arrow = 10px · Ctrl/Cmd+C/V copy/paste</span>
+    </div>
+
+    <div class="kvs" style="margin-top:10px">
+      <div><b>Page</b><div id="kvPage" class="small">1</div></div>
+      <div><b>Fields on page</b><div id="kvCount" class="small">0</div></div>
+      <div><b>Total fields</b><div id="kvTotal" class="small">0</div></div>
+    </div>
+
+    <div id="canvasContainer"></div>
+
+    <div id="msg" class="small" style="margin-top:8px"></div>
+  </section>
+
+  <aside class="card pane pane-right">
+    <div class="panel-title">Template HTML import (labels / tags / snippets)</div>
+    <div class="row">
+      <button id="btnTemplate" class="btn-amber">Import template HTML(s)</button>
+      <input id="fileTemplates" type="file" accept=".html,.htm,text/html" multiple hidden />
+      <button id="btnApplyTemplateFields">Add fields from template(s)</button>
+    </div>
+    <div class="small" style="margin-top:6px">Parses positioned fields, oscarDB labels, fax/print/signature snippets, and body onload handlers from uploaded template HTML files.</div>
+
+    <div class="hr"></div>
+    <div class="panel-title">Auto-tagging</div>
+    <div class="row">
+      <button id="btnAutoTag">Auto-tag untagged</button>
+      <button id="btnMatchByPosition">Transfer tags by position</button>
+    </div>
+    <div class="small">Uses extracted template name↔tag map + heuristics. Imported tags are added to dropdown suggestions.</div>
+
+    <div class="hr"></div>
+    <div class="panel-title">OSCAR tag catalog</div>
+    <div class="row">
+      <input id="tagNew" type="text" placeholder="new_tag_name" style="max-width:220px"/>
+      <button id="btnAddTag">Add tag</button>
+      <button id="btnDeleteTag" class="btn-red">Delete selected</button>
+    </div>
+    <div class="grid2" style="margin-top:8px">
+      <select id="tagManageSelect" size="6"></select>
+      <div>
+        <button id="btnSaveTags" style="width:100%;margin-bottom:6px">Save tags .txt</button>
+        <button id="btnLoadTags" style="width:100%;margin-bottom:6px">Load tags .txt</button>
+        <label style="display:flex;align-items:center;gap:6px"><input id="chkReplaceTags" type="checkbox"/> Replace existing tags on load</label>
+        <input id="fileTagList" type="file" accept=".txt,text/plain,.csv" hidden />
+      </div>
+    </div>
+    <div class="small">Tip: one tag per line in text file (comma/semicolon also supported).</div>
+
+    <div class="hr"></div>
+    <details id="detectionTuningPanel">
+      <summary class="collapsible-summary"><span id="tuningPlus" class="plus-pill">+</span><span>Detection tuning</span></summary>
+      <div style="margin-top:8px">
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
+          <button id="btnPresetStandard" class="btn btn-small" title="Default balanced settings">Standard</button>
+          <button id="btnPresetSmall" class="btn btn-small" title="For dense forms with small PDF checkboxes (10-16px)">Small boxes</button>
+          <button id="btnPresetLarge" class="btn btn-small" title="For larger hand-drawn or printed checkbox squares (20-35px)">Large boxes</button>
+          <button id="btnPresetLines" class="btn btn-small" title="Text input lines only, skip checkbox detection">Lines only</button>
+        </div>
+        <div class="grid3">
+          <label>Min checkbox px<input id="minCb" type="number" value="8" min="4" max="60"/></label>
+          <label>Max checkbox px<input id="maxCb" type="number" value="32" min="8" max="100"/></label>
+          <label>Tolerance ± px<input id="tolCb" type="number" value="8" min="1" max="30"/></label>
+        </div>
+        <div class="grid3" style="margin-top:8px">
+          <label>Line min % width<input id="lineMinPct" type="number" value="8" min="2" max="40" step="0.5"/></label>
+          <label>Dark threshold bias<input id="darkBias" type="number" value="8" min="-40" max="60" step="1"/></label>
+          <label>Gradient multiplier<input id="gradMult" type="number" value="0.9" min="0.1" max="3" step="0.1"/></label>
+        </div>
+        <div class="grid3" style="margin-top:8px">
+          <label>Min side coverage<input id="sideCov" type="number" value="0.40" min="0.1" max="1" step="0.01"/></label>
+          <label>Ring density min<input id="ringMin" type="number" value="0.12" min="0.01" max="1" step="0.01"/></label>
+          <label>Ring density max<input id="ringMax" type="number" value="0.98" min="0.05" max="1" step="0.01"/></label>
+        </div>
+        <div class="grid3" style="margin-top:8px">
+          <label>Inner density max<input id="innerMax" type="number" value="0.78" min="0.01" max="1" step="0.01"/></label>
+          <label>Fill density min<input id="fillMin" type="number" value="0.06" min="0" max="1" step="0.01"/></label>
+          <label>Fill density max<input id="fillMax" type="number" value="0.93" min="0.01" max="1" step="0.01"/></label>
+        </div>
+      </div>
+    </details>
+
+    <div class="hr"></div>
+    <div class="panel-title">Interaction</div>
+    <div class="row">
+      <label style="display:flex;align-items:center;gap:6px"><input id="chkSnap" type="checkbox" checked/> Snap while dragging</label>
+      <label>Snap px <input id="snapPx" type="number" value="8" min="1" max="40" style="width:78px"/></label>
+      <label style="display:flex;align-items:center;gap:6px"><input id="chkGuides" type="checkbox" checked/> Show guides</label>
+    </div>
+    <div class="small">Juno-style alignment help: selected fields can snap to nearby edges/centers.</div>
+
+    <div class="hr"></div>
+    <div class="panel-title">OSCAR/Juno preflight</div>
+    <div class="row">
+      <button id="btnPreflight" class="btn-violet">Run compatibility check</button>
+      <button id="btnInsertPlaceholders">Repair image placeholders in draft</button>
+    </div>
+    <div id="preflightBox" class="preflight-list small"></div>
+    <div class="small">Checks placeholders, duplicate names, untagged fields, and out-of-bounds fields before upload/import.</div>
+
+    <div class="hr"></div>
+    <div class="panel-title">Selected field</div>
+    <div id="selNone" class="small">Select a field to edit.</div>
+    <div id="selEditor" style="display:none">
+      <div class="grid2">
+        <label>Name<input id="fName" type="text"/></label>
+        <label>Type
+          <select id="fType">
+            <option value="text">text</option>
+            <option value="textarea">textarea</option>
+            <option value="checkbox">checkbox</option>
+            <option value="xbox">xbox</option>
+            <option value="date">date</option>
+            <option value="signature">signature</option>
+          </select>
+        </label>
+      </div>
+      <label style="margin-top:8px;display:block">OSCAR tag
+        <div class="row" style="align-items:stretch">
+          <input id="fTag" type="text" list="tagSuggestions" placeholder="patient_name"/>
+          <select id="fTagSelect" style="min-width:150px"></select>
+          <button id="btnUseTag" type="button">Use</button>
+          <button id="btnGuessTag" type="button">Guess</button>
+        </div>
+        <datalist id="tagSuggestions"></datalist>
+      </label>
+      <div class="grid2" style="margin-top:8px">
+        <label>X<input id="fX" type="number"/></label>
+        <label>Y<input id="fY" type="number"/></label>
+        <label>W<input id="fW" type="number"/></label>
+        <label>H<input id="fH" type="number"/></label>
+      </div>
+      <div class="small" style="margin-top:8px">Edits apply instantly while typing/selecting.</div>
+    </div>
+
+    <div class="hr"></div>
+    <div class="panel-title">Extracted snippets / buttons</div>
+    <div id="snippetBox" class="list small"></div>
+    <label style="margin-top:8px;display:flex;align-items:center;gap:7px"><input id="chkIncludeSnippets" type="checkbox" checked/> Include extracted scripts / onload in export</label>
+    <label style="display:flex;align-items:center;gap:7px"><input id="chkIncludeButtons" type="checkbox" checked/> Include Submit / Fax &amp; Submit / Print &amp; Submit buttons in export</label>
+    <label style="margin-top:6px;display:block">jQuery in exported eForm
+      <select id="exportJquery" title="Modern: jQuery 3.7.1 + Migrate 3.4.1 (keeps older OSCAR scripts working), falls back to OSCAR's local copy if the CDN is unreachable. Legacy: OSCAR's bundled jquery-1.7.1 only (no internet, but has known XSS advisories).">
+        <option value="modern" selected>3.7.1 + Migrate (recommended)</option>
+        <option value="legacy">OSCAR local 1.7.1 (legacy)</option>
+      </select>
+    </label>
+
+    <div class="hr"></div>
+    <div class="panel-title">eForm metadata</div>
+    <label>eForm title
+      <input id="eformTitle" type="text" value="Generated OSCAR eForm" placeholder="Generated OSCAR eForm"/>
+    </label>
+    <label style="margin-top:8px;display:block">eForm author
+      <input id="eformAuthor" type="text" placeholder="e.g. Dr. Jane Smith"/>
+    </label>
+
+    <div class="hr"></div>
+    <div class="panel-title">Export (editable before save)</div>
+    <div class="row">
+      <button id="btnBuildDraft">Build HTML draft</button>
+      
+      <button id="btnCopyHtml" class="btn-green">Copy draft</button>
+      <button id="btnDownloadHtml" class="btn-blue">Download draft</button>
+      <button id="btnDownloadOscarZip" class="btn-blue">Download OSCAR package (.zip)</button>
+    </div>
+    <div class="small">Edit this output directly before final export. Use src like ${oscar_image_path}your_image.png (OSCAR-compatible).</div>
+    <textarea id="exportEditor" class="export-editor mono" placeholder="Build draft to populate editable HTML..." style="margin-top:8px"></textarea>
+    
+
+    <div class="hr"></div>
+    <details id="converterPanel">
+      <summary class="panel-title" style="cursor:pointer">PDF → PNG converter (embedded)</summary>
+      <div class="small" style="margin:6px 0">Uses pdf.js from the local vendor/ folder (works offline); falls back to the cdnjs CDN if that folder is missing. Output is PNG. Can auto-load into mapper pages.</div>
+      <div class="grid2">
+        <label>PDF file<input id="convFile" type="file" accept="application/pdf"/></label>
+        <label>Mode
+          <select id="convMode">
+            <option value="single">Selected page</option>
+            <option value="all">All pages (individual PNG files)</option>
+          </select>
+        </label>
+        <label>Page<select id="convPage" disabled><option>Load PDF first</option></select></label>
+        <label>Width px (max 1500)<input id="convWidth" type="number" min="200" max="1500" value="1500"/></label>
+      </div>
+      <div class="row" style="margin-top:6px">
+        <label style="display:flex;align-items:center;gap:6px"><input id="convGray" type="checkbox" checked/> Grayscale</label>
+        <label style="display:flex;align-items:center;gap:6px"><input id="convOpt" type="checkbox" checked/> Optimize levels</label>
+        <label style="display:flex;align-items:center;gap:6px"><input id="convStrip" type="checkbox" checked/> Strip alpha</label>
+        <label style="display:flex;align-items:center;gap:6px">Levels<input id="convLevels" type="number" min="8" max="64" value="24" style="width:78px"/></label>
+        <span class="small">Tip: Use <b>Load to Mapper</b> to import converted pages without downloading.</span>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <button id="btnConvPreview">Preview</button>
+        <button id="btnConvConvertDownload" class="btn-blue">Convert + Download</button>
+        <button id="btnConvLoadOnly" class="btn-violet">Load to Mapper</button>
+        <button id="btnConvConvertAll" class="btn-green">Convert + Download + Load</button>
+        <button id="btnConvClear">Clear links</button>
+      </div>
+      <div id="convStatus" class="small" style="margin-top:6px"></div>
+      <img id="convPreview" alt="converter preview" style="width:100%;max-height:240px;object-fit:contain;border:1px solid var(--line);border-radius:8px;background:#fff;margin-top:6px"/>
+      <div id="convLinks" class="list small" style="margin-top:8px;max-height:140px"></div>
+      <canvas id="convCanvas" style="display:none"></canvas>
+    </details>
+
+    <div class="hr"></div>
+    <div class="panel-title">Template fields preview</div>
+    <div id="templateFieldList" class="list small"></div>
+  </aside>
+</div>
+
+
+<!-- Local copies first (offline); CDN fallback is integrity-pinned. -->
+<script src="vendor/pdf.min.js"></script>
+<script>window.pdfjsLib || document.write('<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" integrity="sha384-/1qUCSGwTur9vjf/z9lmu/eCUYbpOTgSjmpbMQZ1/CtX2v/WcAIKqRv+U1DUCG6e" crossorigin="anonymous"><\/script>')</script>
+<script src="vendor/jszip.min.js"></script>
+<script>window.JSZip || document.write('<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js" integrity="sha384-+mbV2IY1Zk/X1p/nWllGySJSUN8uMs+gUAN10Or95UBH0fpj6GfKgPmgC5EXieXG" crossorigin="anonymous"><\/script>')</script>
+<script>
+(() => {
+    const DEFAULT_TAGS = [
+    'patient_name','first_last_name','patient_nameF','patient_nameL',
+    'sex','dob','dobc2','dob_year','dob_month','dob_day',
+    'patient_id','address','addressline','city','province','postal',
+    'phone','phone2','cell','hin','hinc','hinversion','hc_type',
+    'current_user','current_user_fname_lname','current_user_ohip_no',
+    'current_user_specialty_code','current_user_cpsid','current_user_id',
+    'current_user_email','current_user_fax','current_user_signature_image',
+    'clinic_name','clinic_label','clinic_phone','clinic_fax','clinic_email',
+    'clinic_addressLine','clinic_addressLineFull','clinic_city','clinic_province','clinic_postal',
+    'patient_dob','patient_hin','patient_phone','patient_address','patient_sex',
+    'provider_name','today','today_date','patient_age','label','email'
+  ];
+
+  const state = {
+    currentPage: 1,
+    pages: {
+      1: { imgData: null, naturalW: 0, naturalH: 0, fileName: '' }
+    },
+    fields: [],
+    selected: new Set(),
+    showLabels: true,
+    nextId: 1,
+
+    templateFiles: [],
+    templateNameTagMap: new Map(),
+    templateFields: [],
+    tagCatalog: new Set(DEFAULT_TAGS),
+    snippets: {
+      externalSrc: new Set(),
+      inlineScripts: [],
+      actionFns: new Set(),
+      onloads: new Set(),
+      buttonHtml: [],
+      signatureHtml: []
+    },
+
+    drag: null,
+    resize: null,
+    lasso: null,
+    placeCheckboxMode: false,
+    undoStack: [],
+    exportTitle: 'Generated OSCAR eForm',
+    snap: { enabled: true, threshold: 8, showGuides: true },
+    snapGuides: { page: 1, x: null, y: null },
+    clipboardFields: [],
+    pasteN: 0,
+    exportAuthor: '',
+  };
+  let syncingEditor = false;
+
+
+  const $ = (id) => document.getElementById(id);
+  const msg = (text, cls='small') => {
+    const m = $('msg');
+    m.className = cls;
+    m.textContent = text || '';
+  };
+
+  function updateUndoBtn(){
+    const b = $('btnUndo');
+    if (!b) return;
+    b.disabled = state.undoStack.length === 0;
+    b.textContent = state.undoStack.length ? `Undo (${state.undoStack.length})` : 'Undo';
+  }
+
+  function snapshotForUndo(){
+    return {
+      currentPage: state.currentPage,
+      pages: Object.fromEntries(Object.keys(state.pages).map(n => [n, {...state.pages[Number(n)]}])),
+      fields: state.fields.map(f => ({ ...f })),
+      selected: [...state.selected],
+      nextId: state.nextId,
+      showLabels: state.showLabels,
+      tagCatalog: [...state.tagCatalog],
+      placeCheckboxMode: state.placeCheckboxMode,
+      snap: { ...state.snap }
+    };
+  }
+
+  function restoreFromUndo(snap){
+    if (!snap) return;
+    { const sc=Number(snap.currentPage)||1; state.currentPage=(snap.pages&&snap.pages[sc])?sc:1; }
+    if (snap.pages) {
+      const snapNums = Object.keys(snap.pages).map(Number).filter(n=>n>=1).sort((a,b)=>a-b);
+      Object.keys(state.pages).map(Number).sort((a,b)=>b-a).forEach(n => { if(!snapNums.includes(n)) removeSinglePage(n,true); });
+      snapNums.forEach(n => {
+        if (!state.pages[n]){ state.pages[n]={imgData:null,naturalW:0,naturalH:0,fileName:''}; createPageDOM(n); }
+        Object.assign(state.pages[n], snap.pages[String(n)]);
+      });
+    }
+    state.fields = Array.isArray(snap.fields) ? snap.fields.map(f => ({ ...f })) : [];
+    state.selected = new Set(Array.isArray(snap.selected) ? snap.selected : []);
+    state.nextId = Number(snap.nextId) || (state.fields.reduce((m,f)=>Math.max(m, Number(f.id)||0),0)+1);
+    state.showLabels = snap.showLabels !== false;
+    if (Array.isArray(snap.tagCatalog)) state.tagCatalog = new Set(snap.tagCatalog.filter(t => t && !isRemovedTag(t)));
+    if (snap.snap && typeof snap.snap === 'object') state.snap = { ...state.snap, ...snap.snap };
+
+    Object.keys(state.pages).map(Number).forEach(n => { const el=$('img'+n); if(el) el.src=state.pages[n].imgData||''; });
+    $('chkLabels').checked = state.showLabels;
+    if ($('chkSnap')) $('chkSnap').checked = !!state.snap.enabled;
+    if ($('snapPx')) $('snapPx').value = String(state.snap.threshold || 8);
+    if ($('chkGuides')) $('chkGuides').checked = !!state.snap.showGuides;
+
+    setPlaceCheckboxMode(!!snap.placeCheckboxMode, true);
+    setCurrentPage(state.currentPage);
+    renderAll();
+  }
+
+  function pushUndo(){
+    try{
+      state.undoStack.push(snapshotForUndo());
+      if (state.undoStack.length > 80) state.undoStack.shift();
+      updateUndoBtn();
+    }catch(_){ }
+  }
+
+  function doUndo(){
+    if (!state.undoStack.length){ msg('Nothing to undo.', 'warn'); return; }
+    const snap = state.undoStack.pop();
+    updateUndoBtn();
+    restoreFromUndo(snap);
+    msg('Undid last action.', 'ok');
+  }
+
+  const TUNING_IDS = ['minCb','targetCb','tolCb','lineMinPct','darkBias','gradMult','sideCov','ringMin','ringMax','innerMax','fillMin','fillMax'];
+  function getTuning(){
+    const out = {};
+    TUNING_IDS.forEach(id => {
+      const el = $(id); if (!el) return;
+      const v = Number(el.value);
+      out[id] = Number.isFinite(v) ? v : el.value;
+    });
+    return out;
+  }
+  function setTuning(t){
+    if (!t || typeof t !== 'object') return;
+    TUNING_IDS.forEach(id => {
+      if (t[id] == null) return;
+      const el = $(id); if (el) el.value = String(t[id]);
+    });
+  }
+
+  function normalizeTag(tag){
+    return String(tag || '').trim().replace(/\s+/g,'_').replace(/[^A-Za-z0-9_]/g,'_').replace(/^_+|_+$/g,'');
+  }
+  function parseTagText(text){
+    return String(text || '').split(/[\r\n,;]+/).map(s => normalizeTag(s)).filter(Boolean);
+  }
+
+  const REMOVED_TAGS = new Set(['signature','current_user_signature','signature_image']);
+  function isRemovedTag(tag){ return REMOVED_TAGS.has(String(tag||'').trim().toLowerCase()); }
+
+  const norm = (s='') => String(s).toLowerCase().replace(/\s+/g,'_').replace(/[^a-z0-9_]/g,'').trim();
+  const clamp = (v,min,max) => Math.max(min, Math.min(max, v));
+  const escHtml = (s='') => String(s)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;')
+    .replace(/'/g,'&#39;');
+  const GENERIC_NAME_RE = /^(gen_inputid\d+|page\d+_\d+|field_\d+|input\d+|checkbox\d*)$/i;
+
+  function guessTag(name='', type='text', label=''){
+    if (type === 'signature') return 'current_user_signature_image';
+    const n = norm(name + ' ' + label);
+    if (!n) return '';
+    if (state.tagCatalog.has(n)) return n;
+    if (/(patient_)?name|full_name|first_last_name|lastname|surname|firstname|given_name/.test(n)) return 'patient_name';
+    if (/(dob|date_of_birth|birth_date|birthdate|dobc2)/.test(n)) return state.tagCatalog.has('dobc2') ? 'dobc2' : 'patient_dob';
+    if (/(hin|health_card|health_insurance|ohip|version_code|hinversion)/.test(n)){
+      if (/version/.test(n) && state.tagCatalog.has('hinversion')) return 'hinversion';
+      return state.tagCatalog.has('hin') ? 'hin' : 'patient_hin';
+    }
+    if (/(address|street|city|postal|zip|addressline)/.test(n)){
+      if (state.tagCatalog.has('addressline')) return 'addressline';
+      return 'patient_address';
+    }
+    if (/(phone|telephone|tel|cell|mobile)/.test(n)){
+      if (/cell|mobile/.test(n) && state.tagCatalog.has('cell')) return 'cell';
+      return state.tagCatalog.has('phone') ? 'phone' : 'patient_phone';
+    }
+    if (/(email|mail)/.test(n) && state.tagCatalog.has('email')) return 'email';
+    if (/(sex|gender|male|female|m_f)/.test(n) || (type==='checkbox' && /(male|female|m|f)/.test(n))) {
+      return state.tagCatalog.has('sex') ? 'sex' : 'patient_sex';
+    }
+    if (/(provider|physician|doctor|dr_name|mrp|current_user)/.test(n)){
+      if (state.tagCatalog.has('current_user')) return 'current_user';
+      return 'provider_name';
+    }
+    if (/(clinic.*fax|fax.*clinic)/.test(n)) return state.tagCatalog.has('clinic_fax') ? 'clinic_fax' : '';
+    if (/(clinic.*phone|phone.*clinic)/.test(n)) return state.tagCatalog.has('clinic_phone') ? 'clinic_phone' : '';
+    if (/(clinic|office|site|facility)/.test(n)) return state.tagCatalog.has('clinic_addressline') ? 'clinic_addressline' : 'clinic_name';
+    if (/(today|current_date|form_date|date_today|visit_date)/.test(n)) {
+      if (state.tagCatalog.has('today')) return 'today';
+      return 'today_date';
+    }
+    if (/(age|patient_age)/.test(n)) return 'patient_age';
+    if (/(signature|signed|sig|loadsig)/.test(n)) {
+      if (state.tagCatalog.has('current_user_signature_image')) return 'current_user_signature_image';
+    }
+
+    let best = ''; let bestScore = 0;
+    state.tagCatalog.forEach(tag => {
+      const t = norm(tag); if (!t) return;
+      let score = 0;
+      if (n.includes(t)) score += 5;
+      t.split('_').forEach(tok => { if (tok.length >= 3 && n.includes(tok)) score += 1; });
+      if (score > bestScore){ bestScore = score; best = tag; }
+    });
+    return bestScore >= 3 ? best : '';
+  }
+
+  function readAsDataURL(file){
+    return new Promise((res, rej)=>{
+      const r = new FileReader();
+      r.onload = e => res(e.target.result);
+      r.onerror = rej;
+      r.readAsDataURL(file);
+    });
+  }
+  function readAsText(file){
+    return new Promise((res, rej)=>{
+      const r = new FileReader();
+      r.onload = e => res(e.target.result);
+      r.onerror = rej;
+      r.readAsText(file);
+    });
+  }
+  function loadImage(src){
+    return new Promise((res, rej)=>{
+      const img = new Image();
+      img.onload = () => res(img);
+      img.onerror = rej;
+      img.src = src;
+    });
+  }
+
+  function parseStylePx(styleText, prop){
+    const m = String(styleText || '').match(new RegExp(prop + '\\s*:\\s*([-0-9.]+)(px|%)?', 'i'));
+    if (!m) return null;
+    return { val: parseFloat(m[1]), unit: (m[2] || 'px').toLowerCase() };
+  }
+  function parseAttr(el, attr){ return (el.getAttribute(attr) || '').trim(); }
+
+  function inferPage(el){
+    let cur = el;
+    while (cur && cur !== cur.ownerDocument.body){
+      const id = (cur.id || '').toLowerCase();
+      const cls = (cur.className || '').toString().toLowerCase();
+      if (/page[_\- ]?2|copy[_\- ]?2|second|page2/.test(id + ' ' + cls)) return 2;
+      cur = cur.parentElement;
+    }
+    return 1;
+  }
+
+  function nearestLabelText(el){
+    let text = '';
+    let prev = el.previousSibling;
+    let count = 0;
+    while (prev && count < 5){
+      if (prev.nodeType === Node.TEXT_NODE) text = (prev.textContent || '').trim() + ' ' + text;
+      if (prev.nodeType === Node.ELEMENT_NODE) text = (prev.textContent || '').trim().slice(-120) + ' ' + text;
+      prev = prev.previousSibling;
+      count++;
+    }
+    if (!text && el.parentElement){
+      text = (el.parentElement.textContent || '').replace(/\s+/g,' ').trim().slice(0,140);
+    }
+    return text.replace(/\s+/g, ' ').trim();
+  }
+
+  function extractFunctionNames(js){
+    const out = [];
+    const re = /function\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*\(/g;
+    let m;
+    while ((m = re.exec(js))) out.push(m[1]);
+    return out;
+  }
+
+  function getPositionedBox(el){
+    let cur = el;
+    let depth = 0;
+    while (cur && cur.ownerDocument && cur !== cur.ownerDocument.body && depth < 8){
+      const style = parseAttr(cur, 'style');
+      const l = parseStylePx(style, 'left');
+      const t = parseStylePx(style, 'top');
+      if (l && t && l.unit !== '%' && t.unit !== '%'){
+        let w = parseStylePx(style, 'width');
+        let h = parseStylePx(style, 'height');
+
+        if ((!w || !h) && cur !== el){
+          const ownStyle = parseAttr(el, 'style');
+          w = w || parseStylePx(ownStyle, 'width');
+          h = h || parseStylePx(ownStyle, 'height');
+        }
+
+        const aw = parseFloat(el.getAttribute('width') || cur.getAttribute('width') || '');
+        const ah = parseFloat(el.getAttribute('height') || cur.getAttribute('height') || '');
+        if (!w && Number.isFinite(aw)) w = { val: aw, unit: 'px' };
+        if (!h && Number.isFinite(ah)) h = { val: ah, unit: 'px' };
+
+        return { x: l.val, y: t.val, width: w ? w.val : null, height: h ? h.val : null, ref: cur };
+      }
+      cur = cur.parentElement;
+      depth++;
+    }
+    return null;
+  }
+
+  function refreshTagCatalogUI(){
+    const sorted = [...state.tagCatalog].filter(t => t && !isRemovedTag(t)).sort((a,b)=>a.localeCompare(b));
+    const dl = $('tagSuggestions');
+    if (dl){
+      dl.innerHTML = '';
+      sorted.forEach(tag => {
+        const o = document.createElement('option');
+        o.value = tag;
+        dl.appendChild(o);
+      });
+    }
+    const sel = $('fTagSelect');
+    const manage = $('tagManageSelect');
+    if (sel){
+      const cur = sel.value;
+      sel.innerHTML = '<option value="">Choose tag...</option>';
+      sorted.forEach(tag => {
+        const o = document.createElement('option');
+        o.value = tag;
+        o.textContent = tag;
+        sel.appendChild(o);
+      });
+      if (sorted.includes(cur)) sel.value = cur;
+    }
+    if (manage){
+      const cur2 = manage.value;
+      manage.innerHTML = '';
+      sorted.forEach(tag => {
+        const o = document.createElement('option');
+        o.value = tag;
+        o.textContent = tag;
+        manage.appendChild(o);
+      });
+      if (sorted.includes(cur2)) manage.value = cur2;
+    }
+  }
+
+  // Names/ids on inputs that belong to the form toolbar, not to data fields
+  const CONTROL_INPUT_NAMES = new Set([
+    'submitbutton','submitfaxbutton','printsubmitbutton',
+    'faxnumber','current_user_id','faxno'
+  ]);
+
+  function parseTemplateHtml(text, fileName){
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(text, 'text/html');
+    const template = {
+      name: fileName,
+      text,
+      fields: [],
+      tags: new Set(),
+      nameTagMap: new Map(),
+      snippets: { externalSrc: [], inlineScripts: [], actionFns: [], onloads: [], buttonHtml: [], signatureHtml: [] },
+      isGenerated: false,
+      pageExportW: {}   // pageNo -> exported pixel width (for rescaling on apply)
+    };
+
+    const bodyOnload = (doc.body && doc.body.getAttribute('onload')) || '';
+    if (bodyOnload.trim()) template.snippets.onloads.push(bodyOnload.trim());
+
+    // ── Detect if this is a mapper-generated eForm ──────────────────────────
+    // Markers: gen_input / xMarkOnly class, BGImage id, or our CanvasProSignature div
+    const isGenerated = !!(
+      doc.querySelector('.gen_input, .xMarkOnly') ||
+      doc.querySelector('[id^="BGImage"]') ||
+      doc.querySelector('[id^="CanvasProSignature"]')
+    );
+    template.isGenerated = isGenerated;
+
+    if (isGenerated) {
+      // Read per-page export widths from the page wrapper divs
+      for (let pg = 1; pg <= 10; pg++) {
+        const pageDiv = doc.getElementById('page' + pg);
+        if (!pageDiv) break;
+        const style = parseAttr(pageDiv, 'style');
+        const w = parseStylePx(style, 'width');
+        const h = parseStylePx(style, 'height');
+        if (w && w.unit === 'px') template.pageExportW[pg] = { w: w.val, h: h ? h.val : 0 };
+      }
+
+      // ── Signature fields from CanvasProSignature divs ──────────────────────
+      for (let pg = 1; pg <= 10; pg++) {
+        const sigDiv = doc.getElementById(pg === 1 ? 'CanvasProSignature' : 'CanvasProSignature' + pg);
+        if (!sigDiv) continue;
+        const style = parseAttr(sigDiv, 'style');
+        const l = parseStylePx(style, 'left');
+        const t = parseStylePx(style, 'top');
+        const sigImg = sigDiv.querySelector('img');
+        if (!l || !t || !sigImg) continue;
+        const w = parseFloat(sigImg.getAttribute('width') || '') || 120;
+        const h = parseFloat(sigImg.getAttribute('height') || '') || 30;
+        template.fields.push({
+          id: `tpl_${fileName}_sig${pg}`,
+          page: pg,
+          x: l.val,
+          y: t.val,
+          width: w,
+          height: h,
+          type: 'signature',
+          name: 'signature',
+          oscarTag: 'current_user_signature_image',
+          label: '',
+          _exportW: template.pageExportW[pg] ? template.pageExportW[pg].w : 750
+        });
+      }
+    }
+
+    const elements = Array.from(doc.querySelectorAll('input,textarea,select'));
+    elements.forEach((el, idx) => {
+      const tagName   = el.tagName.toLowerCase();
+      const typeAttr  = (parseAttr(el, 'type') || '').toLowerCase();
+      const cls       = (el.className || '').toLowerCase();
+      const elName    = (parseAttr(el, 'name') || '').toLowerCase().replace(/[^a-z0-9]/g,'');
+      const elId      = (parseAttr(el, 'id')   || '').toLowerCase().replace(/[^a-z0-9]/g,'');
+
+      // ── Skip non-data inputs from generated eForms ─────────────────────────
+      if (isGenerated) {
+        // Skip hidden inputs entirely
+        if (typeAttr === 'hidden') return;
+        // Skip the form action buttons and fax/id controls
+        if (CONTROL_INPUT_NAMES.has(elName) || CONTROL_INPUT_NAMES.has(elId)) return;
+        // Skip submit/button type inputs that don't have an oscarDB tag
+        const hasTag = !!(parseAttr(el, 'oscarDB') || parseAttr(el, 'oscardb'));
+        if ((typeAttr === 'submit' || typeAttr === 'button') && !hasTag) return;
+      }
+
+      let type = 'text';
+      if (tagName === 'textarea') type = 'textarea';
+      else if (typeAttr === 'checkbox' || typeAttr === 'radio') type = 'checkbox';
+      else if (typeAttr === 'date') type = 'date';
+      // Restore checkbox type from generated eForm marker class
+      else if (isGenerated && cls.includes('xmarkonly')) type = 'checkbox';
+
+      const oscarTag = parseAttr(el, 'oscarDB') || parseAttr(el, 'oscardb') || '';
+      const rawName  = parseAttr(el, 'name') || parseAttr(el, 'id') || `field_${idx+1}`;
+      const label    = nearestLabelText(el);
+
+      if (oscarTag) {
+        template.tags.add(oscarTag);
+        if (rawName && !GENERIC_NAME_RE.test(rawName)) template.nameTagMap.set(norm(rawName), oscarTag);
+        if (label && label.length > 1) template.nameTagMap.set(norm(label), oscarTag);
+      }
+
+      const box = getPositionedBox(el);
+      if (!box) return;
+
+      // Skip if this box position came from the BottomButtons toolbar div
+      const refId = ((box.ref && box.ref.id) || '').toLowerCase();
+      if (isGenerated && (refId === 'bottombuttons' || /submit|faxcontrol/i.test(refId))) return;
+
+      const page = inferPage(box.ref || el);
+      const name = (rawName && !GENERIC_NAME_RE.test(rawName)) ? rawName : (oscarTag || rawName);
+
+      // Strip the _N dedup suffix appended by sanitizeUniqueFieldNames (e.g. patient_name_2 -> patient_name)
+      // Only strip if the base name (without _N) exists in tag catalog or is clearly a duplicate artifact
+      const cleanName = isGenerated ? name.replace(/_\d+$/, '') : name;
+
+      const exportW = (isGenerated && template.pageExportW[page])
+        ? template.pageExportW[page].w
+        : null;
+
+      const field = {
+        id: `tpl_${fileName}_${idx}`,
+        page,
+        x: box.x,
+        y: box.y,
+        width:  (box.width  != null ? box.width  : (type === 'checkbox' ? 20 : 150)),
+        height: (box.height != null ? box.height : (type === 'checkbox' ? 20 : 20)),
+        type,
+        name: cleanName,
+        oscarTag,
+        label,
+        ...(exportW ? { _exportW: exportW } : {})
+      };
+      template.fields.push(field);
+    });
+
+    const rawTagRe = /oscardb\s*=\s*["']([^"']+)["']/gi;
+    let m;
+    while ((m = rawTagRe.exec(text))) { if (m[1]) template.tags.add(m[1].trim()); }
+
+    const scripts = Array.from(doc.querySelectorAll('script'));
+    scripts.forEach(sc => {
+      const src    = parseAttr(sc, 'src');
+      const inline = (sc.textContent || '').trim();
+      if (src) { if (/eform|oscar|jquery|fax|print|signature|sign/i.test(src)) template.snippets.externalSrc.push(src); }
+      if (inline) {
+        if (/fax|print|setfax|onbodyload|onload|sign|signature|loadsig/i.test(inline)) {
+          template.snippets.inlineScripts.push(inline);
+          extractFunctionNames(inline).forEach(fn => { if (/fax|print|sign|signature|loadsig/i.test(fn)) template.snippets.actionFns.push(fn); });
+        }
+      }
+    });
+
+    // Only extract button snippets from non-generated templates (generated ones have no useful imported buttons)
+    if (!isGenerated) {
+      const btns = Array.from(doc.querySelectorAll('button,input[type="button"],a,input[type="submit"]'));
+      btns.forEach(b => {
+        const onclick  = parseAttr(b, 'onclick');
+        const textVal  = (b.tagName.toLowerCase()==='input' ? parseAttr(b,'value') : (b.textContent || '')).trim();
+        if (/fax|print|signature|sign/i.test(onclick + ' ' + textVal)) template.snippets.buttonHtml.push(b.outerHTML);
+      });
+    }
+
+    const sigImgs = Array.from(doc.querySelectorAll('img[id*="sig" i], img[name*="sig" i], img[src*="sig" i], img[class*="sig" i]'));
+    sigImgs.forEach(img => { const html = (img.outerHTML || '').trim(); if (html) template.snippets.signatureHtml.push(html); });
+
+    return template;
+  }
+
+  function dedupeFields(fields){
+    const out = [];
+    fields.forEach(f => {
+      const dup = out.some(k => samePage(k.page,f.page) && Math.abs(k.x - f.x) < 2 && Math.abs(k.y - f.y) < 2 && Math.abs(k.width - f.width) < 2 && Math.abs(k.height - f.height) < 2 && norm(k.name) === norm(f.name));
+      if (!dup) out.push(f);
+    });
+    return out;
+  }
+
+  function addField(partial){
+    const f = {
+      id: state.nextId++, page: Number((partial.page ?? state.currentPage)),
+      x: partial.x || 20, y: partial.y || 20,
+      width: partial.width || 180, height: partial.height || 24,
+      type: partial.type || 'text', name: partial.name || `field_${state.nextId}`,
+      oscarTag: partial.oscarTag || '', label: partial.label || ''
+    };
+    state.fields.push(f);
+    if (f.oscarTag && !isRemovedTag(f.oscarTag)) state.tagCatalog.add(f.oscarTag);
+    return f;
+  }
+  function getPageFields(page){ const pg = Number(page); return state.fields.filter(f => Number(f.page) === pg); }
+  function getPageImgEl(page){ return $('img'+page); }
+  function getPageWrap(page){ return $('canvas'+page+'Wrap'); }
+  function getPageOverlay(page){ return $('overlay'+page); }
+  function getPageCount(){ return Math.max(...Object.keys(state.pages).map(Number)); }
+  function samePage(a,b){ return Number(a) === Number(b); }
+
+  function getPageScale(page){
+    const p = state.pages[page], img = getPageImgEl(page);
+    const dw = img.clientWidth || 1, dh = img.clientHeight || 1;
+    return { sx: dw / (p.naturalW || dw || 1), sy: dh / (p.naturalH || dh || 1), dw, dh };
+  }
+
+  function renderCounts(){ const cp = Number(state.currentPage) || 1; $('kvPage').textContent = String(cp); $('kvCount').textContent = String(getPageFields(cp).length); $('kvTotal').textContent = String(state.fields.length); }
+
+  function renderSelectedEditor(){
+    if (state.selected.size === 1){
+      const id = [...state.selected][0];
+      const f = state.fields.find(x => x.id === id);
+      if (!f) { $('selNone').style.display='block'; $('selEditor').style.display='none'; return; }
+      $('selNone').style.display='none'; $('selEditor').style.display='block';
+      syncingEditor = true;
+      $('fName').value = f.name || ''; $('fType').value = f.type || 'text'; $('fTag').value = f.oscarTag || '';
+      $('fX').value = Math.round(f.x); $('fY').value = Math.round(f.y); $('fW').value = Math.round(f.width); $('fH').value = Math.round(f.height);
+      const sel = $('fTagSelect'); if (sel) sel.value = f.oscarTag || '';
+      syncingEditor = false;
+    } else { syncingEditor = false; $('selNone').style.display='block'; $('selEditor').style.display='none'; }
+  }
+
+  function lassoRectPx(l){ const left = Math.min(l.startX, l.curX), top = Math.min(l.startY, l.curY); const width = Math.abs(l.curX - l.startX), height = Math.abs(l.curY - l.startY); return { left, top, width, height, right:left+width, bottom:top+height }; }
+  function intersects(a,b){ return a.left <= b.right && a.right >= b.left && a.top <= b.bottom && a.bottom >= b.top; }
+
+  function applyLassoSelection(){
+    const l = state.lasso; if (!l) return;
+    const page = l.page, r = lassoRectPx(l), { sx, sy } = getPageScale(page), hits = new Set();
+    getPageFields(page).forEach(f => {
+      const fr = { left: f.x*sx, top: f.y*sy, right:(f.x+f.width)*sx, bottom:(f.y+f.height)*sy };
+      if (intersects(r, fr)) hits.add(f.id);
+    });
+    state.selected = l.additive ? new Set([...l.baseSelected, ...hits]) : hits;
+  }
+
+  function fieldElement(f, page){
+    const { sx, sy } = getPageScale(page);
+    const div = document.createElement('div');
+    div.className = 'field' + (state.selected.has(f.id) ? ' selected' : '');
+    div.style.left = (f.x * sx) + 'px'; div.style.top = (f.y * sy) + 'px'; div.style.width = (f.width * sx) + 'px'; div.style.height = (f.height * sy) + 'px';
+    div.dataset.id = String(f.id);
+    if (state.showLabels){ const lb = document.createElement('div'); lb.className='field-label'; lb.textContent=f.name + (f.oscarTag ? ' · ' + f.oscarTag : ''); div.appendChild(lb); }
+    if (state.selected.size === 1 && state.selected.has(f.id)){ const r = document.createElement('div'); r.className='resize se'; r.dataset.handle='se'; div.appendChild(r); }
+    div.addEventListener('mousedown', (e) => onFieldMouseDown(e, f, page));
+    return div;
+  }
+
+  function renderPage(page){
+    const wrap = getPageWrap(page), overlay = getPageOverlay(page), p = state.pages[page];
+    wrap.style.display = (state.currentPage === page) ? 'inline-block' : 'none';
+    overlay.style.cursor = (state.placeCheckboxMode && state.currentPage === page) ? 'crosshair' : 'default';
+    if (!p.imgData){ overlay.innerHTML = ''; getPageImgEl(page).style.display='none'; return; }
+    getPageImgEl(page).style.display='block';
+    overlay.innerHTML='';
+    getPageFields(page).forEach(f => overlay.appendChild(fieldElement(f, page)));
+    if (state.snap.showGuides && state.snapGuides && samePage(state.snapGuides.page,page)){
+      const { sx, sy } = getPageScale(page);
+      const isDragging = !!state.drag;
+      // During drag: show faint candidate lines from all snap targets
+      if (isDragging && state.snap.enabled){
+        const excluded = new Set([...state.selected]);
+        const cands = getSnapCandidates(page, excluded);
+        const p = state.pages[page];
+        const faint = 'rgba(37,99,235,.18)';
+        // Only draw lines that aren't too close to edges (avoids clutter)
+        cands.xs.forEach(cx => {
+          if (cx <= 0 || cx >= (p.naturalW||1)) return; // skip page-edge lines
+          const el = document.createElement('div');
+          el.style.cssText='position:absolute;top:0;bottom:0;width:1px;background:'+faint+';pointer-events:none;z-index:14;left:'+(cx*sx)+'px';
+          overlay.appendChild(el);
+        });
+        cands.ys.forEach(cy => {
+          if (cy <= 0 || cy >= (p.naturalH||1)) return;
+          const el = document.createElement('div');
+          el.style.cssText='position:absolute;left:0;right:0;height:1px;background:'+faint+';pointer-events:none;z-index:14;top:'+(cy*sy)+'px';
+          overlay.appendChild(el);
+        });
+      }
+      // Active snap guides (solid, bright, always shown when snap fires)
+      if (Number.isFinite(state.snapGuides.x)){
+        const v = document.createElement('div'); v.className='guide-v';
+        v.style.left=(state.snapGuides.x*sx - 1)+'px'; overlay.appendChild(v);
+      }
+      if (Number.isFinite(state.snapGuides.y)){
+        const h = document.createElement('div'); h.className='guide-h';
+        h.style.top=(state.snapGuides.y*sy - 1)+'px'; overlay.appendChild(h);
+      }
+      if (Number.isFinite(state.snapGuides.x) && Number.isFinite(state.snapGuides.y)){
+        const d = document.createElement('div'); d.className='guide-dot';
+        d.style.left=(state.snapGuides.x*sx-5)+'px'; d.style.top=(state.snapGuides.y*sy-5)+'px'; overlay.appendChild(d);
+      }
+    }
+    if (state.lasso && samePage(state.lasso.page,page)){ const lr = lassoRectPx(state.lasso); const box=document.createElement('div'); box.className='lasso-box'; box.style.left=lr.left+'px'; box.style.top=lr.top+'px'; box.style.width=lr.width+'px'; box.style.height=lr.height+'px'; overlay.appendChild(box); }
+  }
+
+  function renderAll(){
+    Object.keys(state.pages).map(Number).sort((a,b)=>a-b).forEach(n => renderPage(n));
+    renderCounts(); renderSelectedEditor(); renderTemplateFieldList(); renderSnippetList(); refreshTagCatalogUI();
+  }
+  function setCurrentPage(page){
+    state.currentPage = page;
+    Object.keys(state.pages).map(Number).forEach(n => { const t=$('tab'+n); if(t) t.classList.toggle('active', n===page); });
+    renderAll();
+  }
+  function selectOne(id){ state.selected = new Set([id]); }
+  function toggleSelect(id){ if (state.selected.has(id)) state.selected.delete(id); else state.selected.add(id); }
+
+  function setPlaceCheckboxMode(on, silent=false){
+    state.placeCheckboxMode = !!on;
+    const btn = $('btnAddCheckbox');
+    if (btn){
+      btn.classList.toggle('btn-active', state.placeCheckboxMode);
+      btn.textContent = state.placeCheckboxMode ? 'Placing… click on form' : 'Place Checkbox';
+      btn.title = state.placeCheckboxMode ? 'Click button again to exit checkbox placement mode' : '';
+    }
+    Object.keys(state.pages).map(Number).forEach(n => renderPage(n));
+    if (!silent){
+      msg(state.placeCheckboxMode ? 'Checkbox placement mode ON: click on form to place. Click button again to exit.' : 'Checkbox placement mode OFF.', 'ok');
+    }
+  }
+
+
+  function getSelectedOnPage(page){
+    return state.fields.filter(f => samePage(f.page,page) && state.selected.has(f.id));
+  }
+
+  function groupBounds(fields){
+    if (!fields.length) return null;
+    let left=Infinity, top=Infinity, right=-Infinity, bottom=-Infinity;
+    fields.forEach(f=>{ left=Math.min(left,f.x); top=Math.min(top,f.y); right=Math.max(right,f.x+f.width); bottom=Math.max(bottom,f.y+f.height); });
+    return { left, top, right, bottom, cx:(left+right)/2, cy:(top+bottom)/2, w:right-left, h:bottom-top };
+  }
+
+  function getSnapCandidates(page, excludedIds=new Set()){
+    const p = state.pages[page];
+    const xs = [0, (p.naturalW||0)/2, (p.naturalW||0)];
+    const ys = [0, (p.naturalH||0)/2, (p.naturalH||0)];
+    state.fields.forEach(f=>{
+      if (!samePage(f.page,page) || excludedIds.has(f.id)) return;
+      xs.push(f.x, f.x + f.width/2, f.x + f.width);
+      ys.push(f.y, f.y + f.height/2, f.y + f.height);
+    });
+    return { xs, ys };
+  }
+
+  function snapDeltaForDrag(page, movingFields, rawDx, rawDy){
+    const t = Number(state.snap.threshold)||8;
+    if (!state.snap.enabled || !movingFields.length || t<=0) return {dx:rawDx, dy:rawDy, guideX:null, guideY:null};
+
+    const moved = movingFields.map(f=>({ ...f, x:f.x+rawDx, y:f.y+rawDy }));
+    const gb = groupBounds(moved); if (!gb) return {dx:rawDx,dy:rawDy,guideX:null,guideY:null};
+    const excluded = new Set(movingFields.map(f=>f.id));
+    const cands = getSnapCandidates(page, excluded);
+
+    let bestX = null, bestY = null, dxAdj = rawDx, dyAdj = rawDy;
+    const xLines = [gb.left, gb.cx, gb.right], yLines = [gb.top, gb.cy, gb.bottom];
+
+    xLines.forEach(xLine=>{
+      cands.xs.forEach(cx=>{
+        const d = cx - xLine;
+        if (Math.abs(d) <= t && (!bestX || Math.abs(d) < Math.abs(bestX.d))) bestX = { d, line: cx };
+      });
+    });
+    yLines.forEach(yLine=>{
+      cands.ys.forEach(cy=>{
+        const d = cy - yLine;
+        if (Math.abs(d) <= t && (!bestY || Math.abs(d) < Math.abs(bestY.d))) bestY = { d, line: cy };
+      });
+    });
+
+    if (bestX) dxAdj += bestX.d;
+    if (bestY) dyAdj += bestY.d;
+    return { dx:dxAdj, dy:dyAdj, guideX:bestX ? bestX.line : null, guideY:bestY ? bestY.line : null };
+  }
+
+  function placeCheckboxAtClient(page, clientX, clientY){
+    const p = state.pages[page];
+    if (!p.naturalW){ msg('Upload page image first.', 'warn'); return; }
+    const ov = getPageOverlay(page);
+    const rect = ov.getBoundingClientRect();
+    const { sx, sy } = getPageScale(page);
+    const cbSize = Math.max(6, Number($('manualCbSize')?.value) || Number($('targetCb')?.value) || 20);
+    const xPx = clamp(clientX - rect.left, 0, rect.width);
+    const yPx = clamp(clientY - rect.top, 0, rect.height);
+    const x = clamp(xPx / (sx || 1) - cbSize/2, 0, Math.max(0, p.naturalW - cbSize));
+    const y = clamp(yPx / (sy || 1) - cbSize/2, 0, Math.max(0, p.naturalH - cbSize));
+
+    pushUndo();
+    const f = addField({
+      page,
+      x, y,
+      width: cbSize, height: cbSize,
+      type: 'checkbox',
+      name: `checkbox_${getPageFields(page).filter(x=>x.type==='checkbox'||x.type==='xbox').length + 1}`,
+      oscarTag: ''
+    });
+    selectOne(f.id);
+    renderAll();
+  }
+
+  function onFieldMouseDown(e, f, page){
+    if (state.placeCheckboxMode) return;
+    e.preventDefault(); e.stopPropagation();
+    const additive = e.shiftKey || e.ctrlKey || e.metaKey;
+    if (additive) toggleSelect(f.id); else if (!state.selected.has(f.id) || state.selected.size !== 1) selectOne(f.id);
+    const target = e.target, handle = target && target.dataset && target.dataset.handle, scale = getPageScale(page);
+    if (handle === 'se' && state.selected.size === 1){
+      state.resize = { id: f.id, page, startX:e.clientX, startY:e.clientY, startW:f.width, startH:f.height, sx:scale.sx||1, sy:scale.sy||1, undoPushed:false };
+    } else {
+      const startPositions = {};
+      state.selected.forEach(id => { const ff = state.fields.find(x => x.id === id); if (ff) startPositions[id] = {x:ff.x,y:ff.y}; });
+      state.drag = { page, startX:e.clientX, startY:e.clientY, sx:scale.sx||1, sy:scale.sy||1, startPositions, undoPushed:false };
+    }
+    renderAll();
+  }
+
+  function startLasso(e, page){
+    const overlay = getPageOverlay(page), rect = overlay.getBoundingClientRect();
+    const x = clamp(e.clientX - rect.left, 0, rect.width), y = clamp(e.clientY - rect.top, 0, rect.height);
+    const additive = e.shiftKey || e.ctrlKey || e.metaKey;
+    state.lasso = { page, startX:x, startY:y, curX:x, curY:y, additive, baseSelected: additive ? new Set(state.selected) : new Set() };
+    if (!additive) state.selected.clear();
+    renderAll();
+  }
+
+  document.addEventListener('mousemove', (e) => {
+    if (state.drag){
+      const { page, startX, startY, sx, sy, startPositions } = state.drag;
+      let dx = (e.clientX - startX) / sx, dy = (e.clientY - startY) / sy;
+      if (!state.drag.undoPushed && (Math.abs(dx) > 0.2 || Math.abs(dy) > 0.2)){ pushUndo(); state.drag.undoPushed = true; }
+
+      const moving = state.fields
+        .filter(f => samePage(f.page,page) && state.selected.has(f.id))
+        .map(f => ({ ...f, x:startPositions[f.id]?.x ?? f.x, y:startPositions[f.id]?.y ?? f.y }));
+      const snapped = snapDeltaForDrag(page, moving, dx, dy);
+      dx = snapped.dx; dy = snapped.dy;
+      state.snapGuides = { page, x:snapped.guideX, y:snapped.guideY };
+
+      const p = state.pages[page];
+      state.selected.forEach(id => {
+        const f = state.fields.find(x => x.id===id && samePage(x.page,page)); if (!f) return;
+        const sp = startPositions[id];
+        f.x = clamp((sp?.x ?? f.x)+dx,0,Math.max(0,(p.naturalW||1)-f.width));
+        f.y = clamp((sp?.y ?? f.y)+dy,0,Math.max(0,(p.naturalH||1)-f.height));
+      });
+      renderAll();
+    } else if (state.resize){
+      const r = state.resize, f = state.fields.find(x => x.id === r.id); if (!f) return;
+      const dx=(e.clientX-r.startX)/r.sx, dy=(e.clientY-r.startY)/r.sy, p = state.pages[f.page];
+      if (!r.undoPushed && (Math.abs(dx) > 0.2 || Math.abs(dy) > 0.2)){ pushUndo(); r.undoPushed = true; }
+      f.width = clamp(r.startW+dx,8,Math.max(8,(p.naturalW||1)-f.x)); f.height = clamp(r.startH+dy,8,Math.max(8,(p.naturalH||1)-f.y));
+      renderAll();
+    } else if (state.lasso){
+      const l = state.lasso, overlay = getPageOverlay(l.page), rect = overlay.getBoundingClientRect();
+      l.curX = clamp(e.clientX - rect.left, 0, rect.width); l.curY = clamp(e.clientY - rect.top, 0, rect.height);
+      applyLassoSelection(); renderAll();
+    }
+  });
+  document.addEventListener('mouseup', ()=>{ state.drag=null; state.resize=null; state.snapGuides={page:state.currentPage,x:null,y:null}; if(state.lasso){ state.lasso=null; renderAll(); } else { renderAll(); } });
+
+  function isTypingTarget(t){
+    if (!t) return false;
+    const tag=(t.tagName||'').toLowerCase();
+    return tag==='input' || tag==='textarea' || tag==='select' || t.isContentEditable;
+  }
+
+  function copySelectedFields(){
+    const sel = state.fields.filter(f => state.selected.has(f.id));
+    if (!sel.length){ msg('No selected fields to copy.', 'warn'); return; }
+    const minX = Math.min(...sel.map(f=>f.x));
+    const minY = Math.min(...sel.map(f=>f.y));
+    state.clipboardFields = sel.map(f => ({
+      page: f.page,
+      rx: f.x - minX,
+      ry: f.y - minY,
+      width: f.width,
+      height: f.height,
+      type: f.type,
+      name: f.name,
+      oscarTag: f.oscarTag || ''
+    }));
+    msg(`Copied ${sel.length} field${sel.length===1?'':'s'}.`, 'ok');
+  }
+
+  function pasteCopiedFields(){
+    if (!state.clipboardFields.length){ msg('Clipboard empty.', 'warn'); return; }
+    pushUndo();
+    const page = state.currentPage;
+    const p = state.pages[page];
+    const step = Number(state.pasteN||0);
+    const bump = 14 * (step + 1);
+    state.pasteN = step + 1;
+    state.selected.clear();
+    state.clipboardFields.forEach((cf, i) => {
+      const w = Math.max(8, Number(cf.width)||20), h = Math.max(8, Number(cf.height)||20);
+      const f = addField({
+        page,
+        x: clamp((cf.rx||0)+bump, 0, Math.max(0,(p.naturalW||1)-w)),
+        y: clamp((cf.ry||0)+bump, 0, Math.max(0,(p.naturalH||1)-h)),
+        width: w,
+        height: h,
+        type: cf.type || 'text',
+        name: cf.name ? `${cf.name}_copy` : `field_${state.nextId+i}`,
+        oscarTag: cf.oscarTag || ''
+      });
+      state.selected.add(f.id);
+    });
+    renderAll();
+    msg(`Pasted ${state.clipboardFields.length} field${state.clipboardFields.length===1?'':'s'}.`, 'ok');
+  }
+
+  function duplicateSelectedFields(){
+    copySelectedFields();
+    pasteCopiedFields();
+  }
+
+  document.addEventListener('keydown', (e) => {
+    if (isTypingTarget(e.target)) return;
+
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase()==='c'){
+      if (!state.selected.size) return;
+      e.preventDefault();
+      copySelectedFields();
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase()==='v'){
+      e.preventDefault();
+      pasteCopiedFields();
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase()==='d'){
+      if (!state.selected.size) return;
+      e.preventDefault();
+      duplicateSelectedFields();
+      return;
+    }
+
+    if (!state.selected.size) return;
+    const keys=['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Delete','Backspace']; if(!keys.includes(e.key)) return;
+    e.preventDefault(); const step = e.shiftKey ? 10 : 1, p = state.pages[state.currentPage];
+    pushUndo();
+    if (e.key==='Delete' || e.key==='Backspace'){ state.fields = state.fields.filter(f => !state.selected.has(f.id)); state.selected.clear(); renderAll(); return; }
+    state.selected.forEach(id => {
+      const f = state.fields.find(x => x.id===id && samePage(x.page,state.currentPage)); if(!f) return;
+      if (e.key==='ArrowUp') f.y = clamp(f.y-step,0,Math.max(0,(p.naturalH||1)-f.height));
+      if (e.key==='ArrowDown') f.y = clamp(f.y+step,0,Math.max(0,(p.naturalH||1)-f.height));
+      if (e.key==='ArrowLeft') f.x = clamp(f.x-step,0,Math.max(0,(p.naturalW||1)-f.width));
+      if (e.key==='ArrowRight') f.x = clamp(f.x+step,0,Math.max(0,(p.naturalW||1)-f.width));
+    });
+    renderAll();
+  });
+
+  function onOverlayMouseDown(e, page){
+    const ov = getPageOverlay(page);
+    if (!ov) return;
+    // Fallback delegated field handling (helps in browsers where direct per-field listeners can be flaky)
+    const fieldEl = e.target && e.target.closest ? e.target.closest('.field') : null;
+    if (fieldEl && ov.contains(fieldEl)){
+      const id = Number(fieldEl.dataset.id);
+      const f = state.fields.find(x => x.id === id && samePage(x.page,page));
+      if (f){
+        onFieldMouseDown(e, f, page);
+        return;
+      }
+    }
+
+    // Blank canvas interaction: place checkbox or lasso
+    if (e.target === ov || (e.target && e.target.classList && e.target.classList.contains('lasso-box'))){
+      if (state.placeCheckboxMode){
+        e.preventDefault(); e.stopPropagation();
+        placeCheckboxAtClient(page, e.clientX, e.clientY);
+        return;
+      }
+      startLasso(e, page);
+    }
+  }
+  function bindOverlayPointer(page){
+    const ov = getPageOverlay(page);
+    if (!ov) return;
+    ov.addEventListener('mousedown', (e)=> onOverlayMouseDown(e,page));
+    ov.addEventListener('pointerdown', (e)=>{ if(e.pointerType&&e.pointerType!=='mouse') onOverlayMouseDown(e,page); });
+  }
+
+  const MAX_PAGES = 10;
+
+  function createPageDOM(n){
+    if ($('canvas'+n+'Wrap')) return;
+    const wrap = document.createElement('div');
+    wrap.id='canvas'+n+'Wrap'; wrap.className='canvas-wrap'; wrap.style.display='none';
+    const img = document.createElement('img'); img.id='img'+n; img.alt='Page '+n;
+    const ov = document.createElement('div'); ov.id='overlay'+n; ov.className='overlay';
+    wrap.appendChild(img); wrap.appendChild(ov);
+    $('canvasContainer').appendChild(wrap);
+    bindOverlayPointer(n);
+
+    const btn = document.createElement('button');
+    btn.id='btnUpload'+n; btn.className='btn-blue'; btn.textContent='Upload Page '+n+' image';
+    const inp = document.createElement('input');
+    inp.id='fileImg'+n; inp.type='file'; inp.accept='image/png,image/jpeg,image/jpg'; inp.hidden=true;
+    btn.addEventListener('click', ()=> inp.click());
+    inp.addEventListener('change', e => { handleImageUpload(e.target.files[0], n); e.target.value=''; });
+    $('uploadButtonsRow').appendChild(btn);
+    $('uploadButtonsRow').appendChild(inp);
+
+    const tab = document.createElement('button');
+    tab.id='tab'+n; tab.className='tab'; tab.textContent='Edit Page '+n;
+    tab.addEventListener('click', ()=> setCurrentPage(n));
+    $('tabsRow').appendChild(tab);
+  }
+
+  function removeSinglePage(n, silent=false){
+    if (n<=1) return false;
+    const flds = getPageFields(n);
+    if (!silent && (flds.length>0 || (state.pages[n]&&state.pages[n].imgData))){
+      if (!confirm('Remove page '+n+'? This will delete its image and '+flds.length+' field(s).')) return false;
+    }
+    state.fields = state.fields.filter(f => Number(f.page)!==n);
+    delete state.pages[n];
+    const w=$('canvas'+n+'Wrap'); if(w) w.remove();
+    const b=$('btnUpload'+n); if(b) b.remove();
+    const i=$('fileImg'+n); if(i) i.remove();
+    const t=$('tab'+n); if(t) t.remove();
+    return true;
+  }
+
+  function addPage(){
+    const n = getPageCount()+1;
+    if (n>MAX_PAGES){ msg('Maximum '+MAX_PAGES+' pages supported.','warn'); return; }
+    pushUndo();
+    state.pages[n] = { imgData:null, naturalW:0, naturalH:0, fileName:'' };
+    createPageDOM(n);
+    setCurrentPage(n);
+    msg('Page '+n+' added. Upload an image for it.','ok');
+  }
+
+  function removePage(){
+    const n = getPageCount();
+    if (n<=1){ msg('Cannot remove the only page.','warn'); return; }
+    pushUndo();
+    if (!removeSinglePage(n)){ state.undoStack.pop(); updateUndoBtn(); return; }
+    setCurrentPage(Math.min(state.currentPage, n-1));
+    msg('Removed page '+n+'.','ok');
+  }
+
+  async function handleImageUpload(file, page){
+    if (!file) return;
+    if (!/^image\//i.test(file.type) && !/\.(png|jpe?g)$/i.test(file.name)) { msg('Please upload PNG/JPG image.', 'err'); return; }
+    try{
+      const data = await readAsDataURL(file), img = await loadImage(data);
+      pushUndo();
+      state.pages[page].imgData = data; state.pages[page].naturalW = img.width; state.pages[page].naturalH = img.height; state.pages[page].fileName = file.name || (titleSlug()+'_page'+page+'.png'); 
+      const imgEl = getPageImgEl(page); imgEl.src = data;
+      msg(`Loaded page ${page}: ${img.width}x${img.height}`, 'ok'); renderAll();
+    }catch(err){ msg('Failed to load image: ' + (err.message || err), 'err'); }
+  }
+  // Upload/tab listeners wired dynamically by createPageDOM
+  $('chkLabels').addEventListener('change', (e)=>{ state.showLabels = e.target.checked; renderAll(); });
+  $('chkSnap').addEventListener('change', (e)=>{ state.snap.enabled = !!e.target.checked; renderAll(); });
+  $('snapPx').addEventListener('input', (e)=>{ const v = clamp(Number(e.target.value)||8,1,40); state.snap.threshold = v; });
+  $('chkGuides').addEventListener('change', (e)=>{ state.snap.showGuides = !!e.target.checked; renderAll(); });
+
+  $('btnAdd').addEventListener('click', ()=>{
+    const p = state.pages[state.currentPage]; if (!p.naturalW) { msg('Upload current page image first.', 'warn'); return; }
+    pushUndo();
+    const f = addField({ page: state.currentPage, x:30, y:30, width:Math.max(120,p.naturalW*0.2), height:Math.max(20,p.naturalH*0.03), type:'text', name:`field_${state.fields.length+1}`, oscarTag:'' });
+    selectOne(f.id); renderAll();
+  });
+
+  $('btnAddCheckbox').addEventListener('click', ()=>{
+    const p = state.pages[state.currentPage];
+    if (!p.naturalW) { msg('Upload current page image first.', 'warn'); return; }
+    setPlaceCheckboxMode(!state.placeCheckboxMode);
+  });
+
+  $('btnDeleteSel').addEventListener('click', ()=>{ if(!state.selected.size) return; pushUndo(); state.fields = state.fields.filter(f => !state.selected.has(f.id)); state.selected.clear(); renderAll(); });
+  $('btnCopySel').addEventListener('click', copySelectedFields);
+  $('btnPasteSel').addEventListener('click', pasteCopiedFields);
+  $('btnDuplicateSel').addEventListener('click', duplicateSelectedFields);
+  $('btnUndo').addEventListener('click', doUndo);
+  $('btnClearPage').addEventListener('click', ()=>{ const pg=state.currentPage; pushUndo(); state.fields = state.fields.filter(f=>!samePage(f.page,pg)); state.selected.clear(); renderAll(); msg(`Cleared fields on page ${pg}.`, 'ok'); });
+  $('btnResetAll').addEventListener('click', resetEverything);
+
+  syncingEditor = false;
+  function applyEditorToSelected(){
+    if (syncingEditor) return;
+    if (state.selected.size !== 1) return;
+    const id = [...state.selected][0];
+    const f = state.fields.find(x=>x.id===id);
+    if (!f) return;
+    const name = $('fName').value.trim();
+    if (name) f.name = name;
+    f.type = $('fType').value || f.type;
+    const tag = normalizeTag($('fTag').value);
+    f.oscarTag = tag;
+    if (tag && !isRemovedTag(tag)) state.tagCatalog.add(tag);
+
+    // Special tag: render this field as the provider signature image stamp
+    if (tag === 'current_user_signature_image') {
+      f.type = 'signature';
+      if ($('fType')) $('fType').value = 'signature';
+      if (!f.name || /^field_\d+$/i.test(f.name) || /^text_\d+$/i.test(f.name)) f.name = 'signature';
+    }
+
+    const nx = Number($('fX').value), ny = Number($('fY').value), nw = Number($('fW').value), nh = Number($('fH').value);
+    if (Number.isFinite(nx)) f.x = nx;
+    if (Number.isFinite(ny)) f.y = ny;
+    if (Number.isFinite(nw)) f.width = Math.max(8, nw);
+    if (Number.isFinite(nh)) f.height = Math.max(8, nh);
+
+    renderPage(f.page);
+    renderCounts();
+    refreshTagCatalogUI();
+  }
+
+  const liveIds = ['fName','fTag','fX','fY','fW','fH'];
+  liveIds.forEach(id => {
+    const el=$(id);
+    if(!el) return;
+    el.addEventListener('focus', ()=>{ if (state.selected.size===1) pushUndo(); });
+    el.addEventListener('input', applyEditorToSelected);
+  });
+  $('fType').addEventListener('focus', ()=>{ if (state.selected.size===1) pushUndo(); });
+  $('fType').addEventListener('change', applyEditorToSelected);
+
+  $('btnUseTag').addEventListener('click', ()=>{
+    const v = $('fTagSelect').value;
+    if(!v) return;
+    $('fTag').value = v;
+    applyEditorToSelected();
+  });
+  $('fTagSelect').addEventListener('change', ()=>{
+    const v = $('fTagSelect').value;
+    if(!v) return;
+    $('fTag').value = v;
+    applyEditorToSelected();
+  });
+
+  $('btnGuessTag').addEventListener('click', ()=>{
+    if (state.selected.size !== 1) return;
+    const id=[...state.selected][0], f=state.fields.find(x=>x.id===id); if(!f) return;
+    const g = guessTag(f.name, f.type, f.label);
+    if(g){
+      $('fTag').value = g;
+      applyEditorToSelected();
+    }
+  });
+
+  // OSCAR tag catalog management
+  $('btnAddTag').addEventListener('click', ()=>{
+    const t = normalizeTag($('tagNew').value);
+    if (!t) return;
+    pushUndo();
+    if (!isRemovedTag(t)) state.tagCatalog.add(t);
+    $('tagNew').value = '';
+    refreshTagCatalogUI();
+    msg(`Added tag: ${t}`, 'ok');
+  });
+  $('btnDeleteTag').addEventListener('click', ()=>{
+    const sel = $('tagManageSelect');
+    const t = sel && sel.value ? sel.value : normalizeTag($('tagNew').value);
+    if (!t) return;
+    if (!state.tagCatalog.has(t)){ msg(`Tag not found: ${t}`, 'warn'); return; }
+    pushUndo();
+    state.tagCatalog.delete(t);
+    state.fields.forEach(f => { if (f.oscarTag === t) f.oscarTag = ''; });
+    refreshTagCatalogUI();
+    renderAll();
+    msg(`Deleted tag: ${t}`, 'ok');
+  });
+  $('btnSaveTags').addEventListener('click', ()=>{
+    const sorted = [...state.tagCatalog].filter(t => t && !isRemovedTag(t)).sort((a,b)=>a.localeCompare(b));
+    const blob = new Blob([sorted.join('\n') + '\n'], {type:'text/plain'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'oscar_tag_catalog.txt';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+    msg('Saved tag catalog to oscar_tag_catalog.txt', 'ok');
+  });
+  $('btnLoadTags').addEventListener('click', ()=> $('fileTagList').click());
+  $('fileTagList').addEventListener('change', async (e)=>{
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    try{
+      const txt = await readAsText(file);
+      const tags = parseTagText(txt);
+      if (!tags.length){ msg('No valid tags found in file.', 'warn'); return; }
+      if ($('chkReplaceTags').checked) state.tagCatalog = new Set(tags.filter(t => !isRemovedTag(t)));
+      else tags.forEach(t => { if(!isRemovedTag(t)) state.tagCatalog.add(t); });
+      refreshTagCatalogUI();
+      msg(`Loaded ${tags.length} tag(s) from file.`, 'ok');
+    }catch(err){ msg('Failed to load tags: ' + (err.message || err), 'err'); }
+    finally{ e.target.value=''; }
+  });
+
+  // Session save/load
+  function serializeSession(){
+    return {
+      app: 'oscar-eform-mapper',
+      version: 8,
+      savedAt: new Date().toISOString(),
+      currentPage: state.currentPage,
+      pages: state.pages,
+      fields: state.fields,
+      nextId: state.nextId,
+      showLabels: state.showLabels,
+      tagCatalog: [...state.tagCatalog],
+      templateNameTagMap: [...state.templateNameTagMap.entries()],
+      templateFields: state.templateFields,
+      snippets: {
+        externalSrc: [...state.snippets.externalSrc],
+        inlineScripts: state.snippets.inlineScripts.slice(),
+        actionFns: [...state.snippets.actionFns],
+        onloads: [...state.snippets.onloads],
+        buttonHtml: state.snippets.buttonHtml.slice(),
+        signatureHtml: state.snippets.signatureHtml.slice(),
+      },
+      tuning: getTuning(),
+      exportDraft: $('exportEditor').value || '',
+      exportTitle: state.exportTitle || ($('eformTitle')?.value || 'Generated OSCAR eForm'),
+      exportAuthor: state.exportAuthor || ($('eformAuthor')?.value || ''),
+      snap: { ...state.snap },
+      sourcePdf: state.sourcePdf || null
+    };
+  }
+
+  function loadSessionObject(obj){
+    if (!obj || typeof obj !== 'object') throw new Error('Invalid session file.');
+    if (!obj.pages || !obj.fields) throw new Error('Session missing pages/fields.');
+
+    const sessionNums = Object.keys(obj.pages||{}).map(Number).filter(n=>Number.isFinite(n)&&n>=1).sort((a,b)=>a-b);
+    Object.keys(state.pages).map(Number).sort((a,b)=>b-a).forEach(n => { if(!sessionNums.includes(n)) removeSinglePage(n,true); });
+    sessionNums.forEach(n => {
+      const pd = obj.pages[String(n)] || obj.pages[n] || {};
+      if (!state.pages[n]){ state.pages[n]={imgData:null,naturalW:0,naturalH:0,fileName:''}; createPageDOM(n); }
+      state.pages[n] = { imgData:pd.imgData||null, naturalW:Number(pd.naturalW)||0, naturalH:Number(pd.naturalH)||0, fileName:pd.fileName||'', pdfPage:Number(pd.pdfPage)||null };
+      const imgEl=$('img'+n); if(imgEl) imgEl.src=state.pages[n].imgData||'';
+    });
+
+    state.fields = (obj.fields || []).map((f, i) => ({
+      id: Number(f.id) || (i+1),
+      page: Number(f.page) >= 1 ? Number(f.page) : 1,
+      x: Number(f.x) || 0,
+      y: Number(f.y) || 0,
+      width: Math.max(8, Number(f.width) || 20),
+      height: Math.max(8, Number(f.height) || 20),
+      type: ['text','textarea','checkbox','xbox','date','signature'].includes(f.type) ? f.type : 'text',
+      name: String(f.name || `field_${i+1}`),
+      oscarTag: normalizeTag(f.oscarTag || ''),
+      label: String(f.label || '')
+    }));
+    state.nextId = Math.max(1, Number(obj.nextId) || (state.fields.reduce((m,f)=>Math.max(m,Number(f.id)||0),0)+1));
+    state.selected.clear();
+
+    state.sourcePdf = (obj.sourcePdf && obj.sourcePdf.data) ? obj.sourcePdf : null;
+    fsShowPdf();
+    state.showLabels = obj.showLabels !== false;
+    $('chkLabels').checked = state.showLabels;
+
+    state.tagCatalog = new Set((obj.tagCatalog || DEFAULT_TAGS).map(normalizeTag).filter(t => t && !isRemovedTag(t)));
+    state.templateNameTagMap = new Map((obj.templateNameTagMap || []).filter(a => Array.isArray(a) && a.length>=2));
+    state.templateFields = Array.isArray(obj.templateFields) ? obj.templateFields : [];
+    const sn = obj.snippets || {};
+    state.snippets = {
+      externalSrc: new Set(sn.externalSrc || []),
+      inlineScripts: Array.isArray(sn.inlineScripts) ? sn.inlineScripts : [],
+      actionFns: new Set(sn.actionFns || []),
+      onloads: new Set(sn.onloads || []),
+      buttonHtml: Array.isArray(sn.buttonHtml) ? sn.buttonHtml : [],
+      signatureHtml: Array.isArray(sn.signatureHtml) ? sn.signatureHtml : []
+    };
+
+    setTuning(obj.tuning || {});
+    $('exportEditor').value = typeof obj.exportDraft === 'string' ? obj.exportDraft : '';
+    state.exportTitle = String(obj.exportTitle || 'Generated OSCAR eForm');
+    if ($('eformTitle')) $('eformTitle').value = state.exportTitle;
+    state.exportAuthor = String(obj.exportAuthor || '');
+    if ($('eformAuthor')) $('eformAuthor').value = state.exportAuthor;
+    if (obj.snap && typeof obj.snap === 'object') {
+      state.snap = { ...state.snap, ...obj.snap };
+      if ($('chkSnap')) $('chkSnap').checked = !!state.snap.enabled;
+      if ($('snapPx')) $('snapPx').value = String(state.snap.threshold || 8);
+      if ($('chkGuides')) $('chkGuides').checked = !!state.snap.showGuides;
+    }
+
+    const cp = Number(obj.currentPage)||1;
+    state.currentPage = state.pages[cp] ? cp : 1;
+    state.undoStack = [];
+    updateUndoBtn();
+    setCurrentPage(state.currentPage);
+    renderAll();
+  }
+
+  $('btnSaveSession').addEventListener('click', ()=>{
+    try{
+      const data = serializeSession();
+      const blob = new Blob([JSON.stringify(data, null, 2)], {type:'application/json'});
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      const d = new Date();
+      const ts = `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}_${String(d.getHours()).padStart(2,'0')}${String(d.getMinutes()).padStart(2,'0')}`;
+      a.download = `eform_mapper_session_${ts}.json`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+      msg('Session saved.', 'ok');
+    }catch(err){ msg('Save session failed: ' + (err.message || err), 'err'); }
+  });
+  $('btnLoadSession').addEventListener('click', ()=> $('fileSession').click());
+  $('fileSession').addEventListener('change', async (e)=>{
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    try{
+      const txt = await readAsText(file);
+      const obj = JSON.parse(txt);
+      loadSessionObject(obj);
+      msg(`Session loaded from ${file.name}.`, 'ok');
+    }catch(err){ msg('Load session failed: ' + (err.message || err), 'err'); }
+    finally { e.target.value=''; }
+  });
+
+  function mountConverterTop(){
+    const panel = $('converterPanel');
+    const mount = $('converterTopMount');
+    if (!panel || !mount) return;
+    if (panel.parentElement !== mount) mount.appendChild(panel);
+    panel.classList.add('converter-top');
+    panel.open = true;
+  }
+
+  $('btnToggleConverter').addEventListener('click', ()=>{
+    const panel = $('converterPanel');
+    if (!panel) return;
+    panel.open = !panel.open;
+    panel.scrollIntoView({behavior:'smooth', block:'start'});
+  });
+
+  function initDetectionTuningCollapse(){
+    const det = $('detectionTuningPanel');
+    const plus = $('tuningPlus');
+    if (!det || !plus) return;
+    const sync = ()=>{ plus.textContent = det.open ? '−' : '+'; };
+    det.addEventListener('toggle', sync);
+    sync();
+  }
+
+  $('btnTemplate').addEventListener('click', ()=> $('fileTemplates').click());
+  $('fileTemplates').addEventListener('change', async (e)=>{
+    const files = Array.from(e.target.files || []); if (!files.length) return;
+    try{
+      let parsedFields = 0;
+      for (const file of files){
+        const text = await readAsText(file), tpl = parseTemplateHtml(text, file.name);
+        state.templateFiles.push(tpl);
+        tpl.fields.forEach(f => { state.templateFields.push(f); if(f.oscarTag){ state.templateNameTagMap.set(norm(f.name), f.oscarTag); if(f.label) state.templateNameTagMap.set(norm(f.label), f.oscarTag); }});
+        tpl.nameTagMap.forEach((v,k)=> state.templateNameTagMap.set(k,v));
+        tpl.tags.forEach(t => { if(!isRemovedTag(t)) state.tagCatalog.add(t); });
+        tpl.snippets.externalSrc.forEach(s => state.snippets.externalSrc.add(s));
+        tpl.snippets.inlineScripts.forEach(s => state.snippets.inlineScripts.push(s));
+        tpl.snippets.actionFns.forEach(fn => state.snippets.actionFns.add(fn));
+        tpl.snippets.onloads.forEach(o => state.snippets.onloads.add(o));
+        tpl.snippets.buttonHtml.forEach(b => state.snippets.buttonHtml.push(b));
+        tpl.snippets.signatureHtml.forEach(s => state.snippets.signatureHtml.push(s));
+        parsedFields += tpl.fields.length;
+      }
+      state.templateFields = dedupeFields(state.templateFields);
+      renderAll();
+      msg(`Imported ${files.length} template file(s). Parsed ${parsedFields} fields. Tags in catalog: ${state.tagCatalog.size}.`, 'ok');
+    }catch(err){ msg('Template import failed: ' + (err.message || err), 'err'); }
+    finally { e.target.value=''; }
+  });
+
+  $('btnApplyTemplateFields').addEventListener('click', ()=>{
+    if (!state.templateFields.length){ msg('No template fields parsed yet.', 'warn'); return; }
+    pushUndo();
+    let added=0; const existing=state.fields.slice();
+    state.templateFields.forEach(tf => {
+      // If field came from a generated eForm (has _exportW), rescale coordinates
+      // to the natural image resolution loaded into the mapper.
+      let x = tf.x, y = tf.y, w = tf.width, h = tf.height;
+      if (tf._exportW && tf._exportW > 0) {
+        const p = state.pages[Number(tf.page)];
+        const natW = p && p.naturalW ? p.naturalW : 0;
+        const natH = p && p.naturalH ? p.naturalH : 0;
+        if (natW > 0) {
+          const scale = natW / tf._exportW;
+          x = Math.round(x * scale);
+          y = Math.round(y * scale);
+          w = Math.round(w * scale);
+          h = Math.round(h * scale);
+        }
+      }
+      const dup = existing.some(f =>
+        samePage(f.page, tf.page) &&
+        Math.abs(f.x - x) < 4 && Math.abs(f.y - y) < 4 &&
+        Math.abs(f.width - w) < 6 && Math.abs(f.height - h) < 6 &&
+        norm(f.name) === norm(tf.name)
+      );
+      if (!dup) {
+        addField({ page:tf.page, x, y, width:w, height:h,
+          type:tf.type, name:tf.name,
+          oscarTag: tf.oscarTag || guessTag(tf.name, tf.type, tf.label),
+          label: tf.label || '' });
+        added++;
+      }
+    });
+    renderAll(); msg(`Added ${added} field(s) from template(s).`, added ? 'ok' : 'warn');
+  });
+
+  function autoTagUnmapped(){
+    pushUndo();
+    let changed=0;
+    state.fields.forEach(f => {
+      if (f.oscarTag) return;
+      const fromMap = state.templateNameTagMap.get(norm(f.name)) || (f.label ? state.templateNameTagMap.get(norm(f.label)) : '');
+      const g = fromMap || guessTag(f.name, f.type, f.label);
+      if (g){ f.oscarTag=g; if(!isRemovedTag(g)) state.tagCatalog.add(g); changed++; }
+    });
+    renderAll(); msg(changed ? `Auto-tagged ${changed} field(s).` : 'No fields were auto-tagged.', changed ? 'ok':'warn');
+  }
+  $('btnAutoTag').addEventListener('click', autoTagUnmapped);
+
+  function transferTagsByPosition(){
+    if (!state.templateFields.length){ msg('Import template HTML first.', 'warn'); return; }
+    pushUndo();
+    let changed=0;
+    state.fields.forEach(f => {
+      if (f.oscarTag) return;
+      let best=null, bestD=Infinity;
+      state.templateFields.forEach(tf => {
+        if (!samePage(tf.page,f.page) || !tf.oscarTag) return;
+        const cx1=f.x+f.width/2, cy1=f.y+f.height/2, cx2=tf.x+tf.width/2, cy2=tf.y+tf.height/2;
+        const d=Math.hypot(cx1-cx2, cy1-cy2), sizeClose=Math.abs(f.width-tf.width)<=20 && Math.abs(f.height-tf.height)<=20;
+        if(d<bestD && (sizeClose || d<40)){bestD=d; best=tf;}
+      });
+      if(best && bestD<60){ f.oscarTag=best.oscarTag; if(!isRemovedTag(best.oscarTag)) state.tagCatalog.add(best.oscarTag); changed++; }
+    });
+    renderAll(); msg(changed ? `Transferred ${changed} tag(s) by position.` : 'No positional tag matches found.', changed ? 'ok':'warn');
+  }
+  $('btnMatchByPosition').addEventListener('click', transferTagsByPosition);
+
+  function renderTemplateFieldList(){
+    const box=$('templateFieldList'); box.innerHTML='';
+    if(!state.templateFields.length){ box.innerHTML='<div class="list-item">No template fields parsed yet.</div>'; return; }
+    state.templateFields.slice(0,300).forEach(f=>{ const d=document.createElement('div'); d.className='list-item mono'; d.textContent=`p${f.page} ${Math.round(f.x)},${Math.round(f.y)} ${Math.round(f.width)}x${Math.round(f.height)}  ${f.name}${f.oscarTag ? ' -> ' + f.oscarTag : ''}`; box.appendChild(d); });
+    if(state.templateFields.length>300){ const d=document.createElement('div'); d.className='list-item'; d.textContent=`... ${state.templateFields.length-300} more`; box.appendChild(d); }
+  }
+
+  function renderSnippetList(){
+    const box=$('snippetBox'); box.innerHTML=''; const rows=[];
+    if(state.snippets.externalSrc.size) rows.push(`External scripts: ${state.snippets.externalSrc.size}`);
+    if(state.snippets.inlineScripts.length) rows.push(`Inline script blocks: ${state.snippets.inlineScripts.length}`);
+    if(state.snippets.actionFns.size) rows.push(`Detected action fns: ${[...state.snippets.actionFns].join(', ')}`);
+    if(state.snippets.onloads.size) rows.push(`Body onload hooks: ${state.snippets.onloads.size}`);
+    if(state.snippets.buttonHtml.length) rows.push(`Template button snippets detected: ${state.snippets.buttonHtml.length} (informational — output uses generated Submit/Fax/Print buttons)`);
+    if(state.snippets.signatureHtml.length) rows.push(`Signature image snippets: ${state.snippets.signatureHtml.length}`);
+    if(!rows.length){ box.innerHTML='<div class="list-item">No snippets extracted yet.</div>'; return; }
+    rows.forEach(r=>{ const d=document.createElement('div'); d.className='list-item'; d.textContent=r; box.appendChild(d); });
+  }
+
+
+  function countOnInRect(arr,w,h,x1,y1,x2,y2){
+    const xx1 = clamp(Math.round(x1), 0, w-1), yy1 = clamp(Math.round(y1), 0, h-1);
+    const xx2 = clamp(Math.round(x2), 0, w-1), yy2 = clamp(Math.round(y2), 0, h-1);
+    let n = 0;
+    for(let y=yy1;y<=yy2;y++){
+      let idx = y*w + xx1;
+      for(let x=xx1;x<=xx2;x++,idx++) if(arr[idx]) n++;
+    }
+    return n;
+  }
+
+  function edgeCoverage(clean,w,h,minx,miny,maxx,maxy,th){
+    // Fraction of positions along each edge that have at least one "on" pixel in a thin band.
+    let topHit=0, bottomHit=0, leftHit=0, rightHit=0;
+    const bw = maxx-minx+1, bh = maxy-miny+1;
+    for(let x=minx;x<=maxx;x++){
+      let t=false,b=false;
+      for(let y=miny;y<Math.min(h,miny+th);y++){ if(clean[y*w+x]){ t=true; break; } }
+      for(let y=Math.max(0,maxy-th+1);y<=maxy;y++){ if(clean[y*w+x]){ b=true; break; } }
+      if(t) topHit++; if(b) bottomHit++;
+    }
+    for(let y=miny;y<=maxy;y++){
+      let l=false,r=false;
+      for(let x=minx;x<Math.min(w,minx+th);x++){ if(clean[y*w+x]){ l=true; break; } }
+      for(let x=Math.max(0,maxx-th+1);x<=maxx;x++){ if(clean[y*w+x]){ r=true; break; } }
+      if(l) leftHit++; if(r) rightHit++;
+    }
+    return {
+      top: topHit/Math.max(1,bw),
+      bottom: bottomHit/Math.max(1,bw),
+      left: leftHit/Math.max(1,bh),
+      right: rightHit/Math.max(1,bh),
+    };
+  }
+
+  function cornerPresence(clean,w,h,minx,miny,maxx,maxy,cs){
+    // Require ink near each corner to avoid circles/letter holes being classified as boxes.
+    const c1 = countOnInRect(clean,w,h,minx,miny,minx+cs-1,miny+cs-1);
+    const c2 = countOnInRect(clean,w,h,maxx-cs+1,miny,maxx,miny+cs-1);
+    const c3 = countOnInRect(clean,w,h,minx,maxy-cs+1,minx+cs-1,maxy);
+    const c4 = countOnInRect(clean,w,h,maxx-cs+1,maxy-cs+1,maxx,maxy);
+    return [c1,c2,c3,c4];
+  }
+
+  function resetEverything(){
+    const ok = confirm('Reset everything? This clears images, fields, imported templates, snippets, and export draft.');
+    if(!ok) return;
+    pushUndo();
+    state.currentPage = 1;
+    Object.keys(state.pages).map(Number).sort((a,b)=>b-a).forEach(n => { if(n>1) removeSinglePage(n,true); });
+    state.pages[1] = { imgData:null, naturalW:0, naturalH:0, fileName:'' };
+    state.fields = [];
+    state.selected.clear();
+    state.nextId = 1;
+
+    state.templateFiles = [];
+    state.templateNameTagMap = new Map();
+    state.templateFields = [];
+    state.tagCatalog = new Set(DEFAULT_TAGS.filter(t => !isRemovedTag(t)));
+    state.snippets = {
+      externalSrc: new Set(),
+      inlineScripts: [],
+      actionFns: new Set(),
+      onloads: new Set(),
+      buttonHtml: [],
+      signatureHtml: []
+    };
+
+    const _ri=$('img1'); if(_ri) _ri.src='';
+    Object.keys(state.pages).map(Number).forEach(n=>{ const fi=$('fileImg'+n); if(fi) fi.value=''; });
+    $('fileTemplates').value = '';
+    $('exportEditor').value = '';
+    state.exportTitle = 'Generated OSCAR eForm';
+    state.exportAuthor = '';
+    if ($('eformTitle')) $('eformTitle').value = state.exportTitle;
+    if ($('eformAuthor')) $('eformAuthor').value = '';
+    setCurrentPage(1);
+    msg('Reset complete.', 'ok');
+  }
+
+
+  async function applyDetectPreset(name){
+    const presets = {
+      standard: { minCb:8,  maxCb:32, tolCb:8,  darkBias:8,  gradMult:0.9, sideCov:0.40, ringMin:0.12, ringMax:0.98, innerMax:0.78, fillMin:0.06, fillMax:0.93, lineMinPct:8  },
+      small:    { minCb:6,  maxCb:20, tolCb:6,  darkBias:12, gradMult:0.7, sideCov:0.30, ringMin:0.08, ringMax:0.98, innerMax:0.85, fillMin:0.04, fillMax:0.95, lineMinPct:8  },
+      large:    { minCb:16, maxCb:50, tolCb:10, darkBias:6,  gradMult:1.0, sideCov:0.50, ringMin:0.20, ringMax:0.98, innerMax:0.70, fillMin:0.08, fillMax:0.90, lineMinPct:8  },
+      lines:    { minCb:999,maxCb:999,tolCb:1,  darkBias:8,  gradMult:0.9, sideCov:0.40, ringMin:0.12, ringMax:0.98, innerMax:0.78, fillMin:0.06, fillMax:0.93, lineMinPct:8  },
+    };
+    const p = presets[name]; if (!p) return;
+    const set = (id,v) => { const el=$(''+id); if(el) el.value = String(v); };
+    set('minCb',p.minCb); set('maxCb',p.maxCb); set('tolCb',p.tolCb);
+    set('darkBias',p.darkBias); set('gradMult',p.gradMult); set('sideCov',p.sideCov);
+    set('ringMin',p.ringMin); set('ringMax',p.ringMax); set('innerMax',p.innerMax);
+    set('fillMin',p.fillMin); set('fillMax',p.fillMax); set('lineMinPct',p.lineMinPct);
+    msg('Preset "' + name + '" applied. Run Auto Detect to use it.', 'ok');
+  }
+  if ($('btnPresetStandard')) $('btnPresetStandard').addEventListener('click', ()=>applyDetectPreset('standard'));
+  if ($('btnPresetSmall')) $('btnPresetSmall').addEventListener('click', ()=>applyDetectPreset('small'));
+  if ($('btnPresetLarge')) $('btnPresetLarge').addEventListener('click', ()=>applyDetectPreset('large'));
+  if ($('btnPresetLines')) $('btnPresetLines').addEventListener('click', ()=>applyDetectPreset('lines'));
+
+  // Explicit 4-sided rectangle scan — finds hollow square outlines without needing
+  // them to be a single connected component. Robust against thin PDF borders and
+  // corner gaps that defeat the connected-component approach.
+  function rectScan(bin, w, h, minSz, maxSz, sideCovTh, innerMaxTh){
+    const results = [];
+    // Build row-runs of dark pixels for fast horizontal lookup
+    // rowRun[y] = sorted array of {x1,x2} runs
+    const rowRun = new Array(h);
+    for(let y=0;y<h;y++){
+      const runs=[]; let x=0;
+      while(x<w){
+        while(x<w && !bin[y*w+x]) x++;
+        if(x>=w) break;
+        const x1=x;
+        while(x<w && bin[y*w+x]) x++;
+        runs.push({x1,x2:x-1});
+      }
+      rowRun[y]=runs;
+    }
+    // Build col-runs of dark pixels for fast vertical lookup
+    const colRun = new Array(w);
+    for(let x=0;x<w;x++){
+      const runs=[]; let y=0;
+      while(y<h){
+        while(y<h && !bin[y*w+x]) y++;
+        if(y>=h) break;
+        const y1=y;
+        while(y<h && bin[y*w+x]) y++;
+        runs.push({y1,y2:y-1});
+      }
+      colRun[x]=runs;
+    }
+
+    // Helper: fraction of columns x1..x2 that have a dark pixel in rows y1..y1+band-1
+    function topEdgeCov(y1,x1,x2,band){
+      let hit=0; const bw=x2-x1+1;
+      // Scan each column for dark pixel in band
+      for(let x=x1;x<=x2;x++){
+        const cRuns=colRun[x];
+        for(const r of cRuns){
+          if(r.y1<=y1+band-1 && r.y2>=y1){hit++;break;}
+        }
+      }
+      return hit/Math.max(1,bw);
+    }
+    function botEdgeCov(y2,x1,x2,band){
+      let hit=0; const bw=x2-x1+1;
+      for(let x=x1;x<=x2;x++){
+        const cRuns=colRun[x];
+        for(const r of cRuns){
+          if(r.y1<=y2 && r.y2>=y2-band+1){hit++;break;}
+        }
+      }
+      return hit/Math.max(1,bw);
+    }
+    function leftEdgeCov(x1,y1,y2,band){
+      let hit=0; const bh=y2-y1+1;
+      for(let y=y1;y<=y2;y++){
+        const rRuns=rowRun[y];
+        for(const r of rRuns){
+          if(r.x1<=x1+band-1 && r.x2>=x1){hit++;break;}
+        }
+      }
+      return hit/Math.max(1,bh);
+    }
+    function rightEdgeCov(x2,y1,y2,band){
+      let hit=0; const bh=y2-y1+1;
+      for(let y=y1;y<=y2;y++){
+        const rRuns=rowRun[y];
+        for(const r of rRuns){
+          if(r.x1<=x2 && r.x2>=x2-band+1){hit++;break;}
+        }
+      }
+      return hit/Math.max(1,bh);
+    }
+    function innerDark(x1,y1,x2,y2,band){
+      // Fraction of interior pixels that are dark
+      const ix1=x1+band, iy1=y1+band, ix2=x2-band, iy2=y2-band;
+      if(ix1>ix2||iy1>iy2) return 0;
+      let dark=0, total=0;
+      for(let y=iy1;y<=iy2;y++){
+        for(let x=ix1;x<=ix2;x++){
+          total++;
+          if(bin[y*w+x]) dark++;
+        }
+      }
+      return dark/Math.max(1,total);
+    }
+
+    const band=Math.max(1, Math.round(minSz*0.15));
+
+    // Scan for top-left corners: a dark pixel that starts a horizontal run
+    for(let y0=1;y0<h-minSz;y0++){
+      for(const topRun of rowRun[y0]){
+        // Try each possible width in this run
+        for(let sz=minSz;sz<=Math.min(maxSz,topRun.x2-topRun.x1+1+2);sz++){
+          const x0=topRun.x1;
+          const x1=x0, y1=y0, x2=x1+sz-1, y2=y1+sz-1;
+          if(x2>=w || y2>=h) continue;
+          // Aspect: must be roughly square (allow 10% deviation for slightly rect boxes)
+          // Width is sz, height is sz — always square in this scan
+
+          const tc=topEdgeCov(y1,x1,x2,band);
+          if(tc < sideCovTh) continue;
+          const bc=botEdgeCov(y2,x1,x2,band);
+          if(bc < sideCovTh) continue;
+          const lc=leftEdgeCov(x1,y1,y2,band);
+          if(lc < sideCovTh) continue;
+          const rc=rightEdgeCov(x2,y1,y2,band);
+          if(rc < sideCovTh) continue;
+          const id=innerDark(x1,y1,x2,y2,band);
+          if(id > innerMaxTh) continue;
+
+          results.push({x1,y1,x2,y2,sz});
+          break; // found best fit for this run start, move on
+        }
+      }
+    }
+    return results;
+  }
+
+  async function detectCurrentPage(){
+    const page = state.currentPage, p = state.pages[page];
+    if (!p.imgData || !p.naturalW) { msg('Upload page image first.', 'warn'); return; }
+    const minCb = Number($('minCb').value) || 8;
+    const maxCb = Number($('maxCb').value) || 32;
+    const tolCb = Number($('tolCb').value) || 8;
+    const targetCb = Math.round((minCb + maxCb) / 2);
+    const lineMinPct = Number($('lineMinPct').value) || 8;
+    const darkBias = Number($('darkBias').value) || 8;
+    const gradMult = Number($('gradMult').value) || 0.9;
+    const sideCov = Number($('sideCov').value) || 0.52;
+    const ringMin = Number($('ringMin').value) || 0.18;
+    const ringMax = Number($('ringMax').value) || 0.98;
+    const innerMax = Number($('innerMax').value) || 0.78;
+    const fillMin = Number($('fillMin').value) || 0.06;
+    const fillMax = Number($('fillMax').value) || 0.93;
+    try {
+      const img = await loadImage(p.imgData);
+      const maxDim = 1600;
+      const s = Math.min(1, maxDim / Math.max(img.width, img.height));
+      const w = Math.max(1, Math.round(img.width * s));
+      const h = Math.max(1, Math.round(img.height * s));
+
+      const c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      const ctx = c.getContext('2d', { willReadFrequently: true });
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0,0,w,h);
+      ctx.drawImage(img,0,0,w,h);
+
+      const data = ctx.getImageData(0,0,w,h).data;
+      const gray = new Uint8Array(w*h);
+      for(let i=0,pix=0;i<gray.length;i++,pix+=4){
+        gray[i] = Math.round(0.299*data[pix] + 0.587*data[pix+1] + 0.114*data[pix+2]);
+      }
+
+      // Adaptive threshold with slight lift to keep faint gray checkbox borders.
+      let sum=0; for(let i=0;i<gray.length;i++) sum += gray[i];
+      const mean = sum / gray.length;
+      let varr=0; for(let i=0;i<gray.length;i++){ const d=gray[i]-mean; varr += d*d; }
+      const stdev = Math.sqrt(varr / gray.length);
+      const darkTh = Math.max(35, Math.min(235, Math.round(mean - stdev*0.32 + darkBias)));
+
+      // Gradient map catches faded strokes that pure threshold may miss.
+      const grad = new Uint16Array(w*h);
+      let gsum = 0, g2 = 0;
+      for(let y=1;y<h-1;y++){
+        for(let x=1;x<w-1;x++){
+          const i = y*w + x;
+          const gx = Math.abs(gray[i+1] - gray[i-1]);
+          const gy = Math.abs(gray[i+w] - gray[i-w]);
+          const g = gx + gy;
+          grad[i] = g;
+          gsum += g; g2 += g*g;
+        }
+      }
+      const gMean = gsum / Math.max(1,(w-2)*(h-2));
+      const gStd = Math.sqrt(Math.max(0, g2 / Math.max(1,(w-2)*(h-2)) - gMean*gMean));
+      const gTh = gMean + gStd * gradMult;
+
+      const bin = new Uint8Array(w*h);
+      for(let i=0;i<bin.length;i++){
+        const isDark = gray[i] < darkTh;
+        const isEdge = grad[i] > gTh;
+        bin[i] = (isDark || isEdge) ? 1 : 0;
+      }
+
+      // Denoise: remove isolated pixels, bridge near gaps.
+      const clean = new Uint8Array(bin);
+      for(let y=1;y<h-1;y++){
+        for(let x=1;x<w-1;x++){
+          const idx = y*w+x;
+          let n=0;
+          for(let yy=-1;yy<=1;yy++) for(let xx=-1;xx<=1;xx++){
+            if(xx===0 && yy===0) continue;
+            n += bin[(y+yy)*w+(x+xx)];
+          }
+          if (bin[idx] && n<=1) clean[idx]=0;
+          else if (!bin[idx] && n>=7) clean[idx]=1;
+        }
+      }
+
+      const newFields = [];
+      // Detect long thin horizontal lines -> text boxes.
+      const minSeg = Math.max(26, Math.round(w*(lineMinPct/100)));
+      const segs = [];
+      for(let y=0;y<h;y++){
+        let x=0;
+        while(x<w){
+          while(x<w && !clean[y*w+x]) x++;
+          if(x>=w) break;
+          const start = x; let end = x, gap=0;
+          while(x<w){
+            if(clean[y*w+x]){ end=x; gap=0; }
+            else { gap++; if(gap>2) break; }
+            x++;
+          }
+          if(end-start+1 >= minSeg) segs.push({y,x1:start,x2:end});
+        }
+      }
+      segs.sort((a,b)=>a.y-b.y);
+      const bands = [];
+      segs.forEach(sg=>{
+        let merged=false;
+        for(let i=bands.length-1;i>=0;i--){
+          const b = bands[i];
+          if(sg.y > b.y2+2) break;
+          const overlap = Math.max(0, Math.min(b.x2,sg.x2)-Math.max(b.x1,sg.x1)+1);
+          const minW = Math.min(b.x2-b.x1+1, sg.x2-sg.x1+1);
+          if(sg.y<=b.y2+2 && overlap/Math.max(1,minW)>=0.6){
+            b.y2=sg.y; b.x1=Math.min(b.x1,sg.x1); b.x2=Math.max(b.x2,sg.x2); merged=true; break;
+          }
+        }
+        if(!merged) bands.push({x1:sg.x1,x2:sg.x2,y1:sg.y,y2:sg.y});
+      });
+
+      bands.forEach((b,idx)=>{
+        const thick = b.y2-b.y1+1, bw = b.x2-b.x1+1;
+        if(thick > Math.max(3,Math.round(h*0.012)) || bw < minSeg) return;
+        const hNat = Math.max(18, p.naturalH*0.026);
+        const yLine = (b.y1+b.y2)/2;
+        const x = b.x1/s, wNat = bw/s;
+        const y = clamp(yLine/s - hNat*0.75, 0, p.naturalH-hNat);
+        newFields.push({page, x, y, width:wNat, height:hNat, type:'text', name:`text_${idx+1}`, oscarTag:''});
+      });
+
+      // Connected component pass for checkboxes.
+      const visited = new Uint8Array(w*h);
+      const stack = [];
+      const cb = [];
+
+      const minNat = Math.max(4, minCb);
+      const maxNat = maxCb + tolCb;
+      for(let y0=0;y0<h;y0++){
+        for(let x0=0;x0<w;x0++){
+          const st = y0*w+x0;
+          if(!clean[st] || visited[st]) continue;
+          visited[st] = 1;
+          stack.length = 0;
+          stack.push(st);
+
+          let minx=x0, maxx=x0, miny=y0, maxy=y0, count=0;
+          while(stack.length){
+            const idx = stack.pop(); count++;
+            const y = (idx/w)|0, x = idx - y*w;
+            if(x<minx) minx=x; if(x>maxx) maxx=x; if(y<miny) miny=y; if(y>maxy) maxy=y;
+
+            const n1=idx-1; if(x>0   && clean[n1] && !visited[n1]){visited[n1]=1; stack.push(n1);}
+            const n2=idx+1; if(x<w-1 && clean[n2] && !visited[n2]){visited[n2]=1; stack.push(n2);}
+            const n3=idx-w; if(y>0   && clean[n3] && !visited[n3]){visited[n3]=1; stack.push(n3);}
+            const n4=idx+w; if(y<h-1 && clean[n4] && !visited[n4]){visited[n4]=1; stack.push(n4);}
+          }
+
+          const bw = maxx-minx+1, bh = maxy-miny+1;
+          const wNat = bw/s, hNat = bh/s;
+          const sizeNat = (wNat + hNat) / 2;
+
+          if(wNat<minNat || hNat<minNat || wNat>maxNat || hNat>maxNat) continue;
+          if(sizeNat < minNat || sizeNat > maxNat) continue; // already filtered above
+
+          const aspect = wNat / Math.max(1e-6, hNat);
+          if(aspect < 0.82 || aspect > 1.22) continue;
+
+          const ring = Math.max(1, Math.round(Math.min(bw,bh)*0.15));
+          let ringOn=0, ringPix=0, innerOn=0, innerPix=0;
+          for(let yy=miny;yy<=maxy;yy++){
+            for(let xx=minx;xx<=maxx;xx++){
+              const isRing = (xx < minx+ring || xx > maxx-ring || yy < miny+ring || yy > maxy-ring);
+              if(isRing){ ringPix++; if(clean[yy*w+xx]) ringOn++; }
+              else { innerPix++; if(clean[yy*w+xx]) innerOn++; }
+            }
+          }
+          const ringDen = ringOn / Math.max(1, ringPix);
+          const innerDen = innerOn / Math.max(1, innerPix);
+          const fillDen = count / Math.max(1, bw*bh);
+
+          const edgeCov = edgeCoverage(clean,w,h,minx,miny,maxx,maxy,Math.max(1,ring));
+          const minSideCov = sideCov; // stronger rectangle requirement, helps reject P/A holes
+          if(edgeCov.top < minSideCov || edgeCov.bottom < minSideCov || edgeCov.left < minSideCov || edgeCov.right < minSideCov) continue;
+
+          const cs = Math.max(1, Math.round(Math.min(bw,bh)*0.18));
+          const corners = cornerPresence(clean,w,h,minx,miny,maxx,maxy,cs);
+          const cornerMin = Math.max(1, Math.floor(cs*cs*0.06));
+          if(corners.some(v => v < cornerMin)) continue;
+
+          if(ringDen < ringMin || ringDen > ringMax) continue;
+          if(innerDen > innerMax) continue;
+          if(fillDen < fillMin || fillDen > fillMax) continue;
+
+          // classify as xbox if interior has significant marks.
+          const type = 'checkbox';
+          const size = Math.max(8, sizeNat);
+          cb.push({
+            page,
+            x:minx/s, y:miny/s,
+            width:size, height:size,
+            type, name:'checkbox', oscarTag:''
+          });
+        }
+      }
+
+      // ── Rect scan pass: explicit 4-sided rectangle finder ─────────────────
+      // Robust for thin-border PDF checkboxes that don't form a single connected component.
+      const minSzPx = Math.max(4, Math.round(minNat * s));
+      const maxSzPx = Math.round(maxNat * s);
+      const rectCandidates = rectScan(clean, w, h, minSzPx, maxSzPx, sideCov, innerMax);
+      rectCandidates.forEach(r => {
+        const bw = r.x2-r.x1+1, bh = r.y2-r.y1+1;
+        const wNat = bw/s, hNat = bh/s;
+        const sizeNat = (wNat+hNat)/2;
+        if(sizeNat >= minNat && sizeNat <= maxNat) {
+          cb.push({ page, x:r.x1/s, y:r.y1/s, width:sizeNat, height:sizeNat, type:'checkbox', name:'checkbox', oscarTag:'' });
+        }
+      });
+
+      cb.sort((a,b)=>a.y-b.y || a.x-b.x);
+      const dedupCb = [];
+      cb.forEach(cand => {
+        const dup = dedupCb.some(k => {
+          const dc = Math.hypot((cand.x+cand.width/2)-(k.x+k.width/2), (cand.y+cand.height/2)-(k.y+k.height/2));
+          return dc < Math.max(cand.width,k.width)*0.55;
+        });
+        if(!dup) dedupCb.push(cand);
+      });
+
+      pushUndo();
+      const before = getPageFields(page).length;
+      let tN = getPageFields(page).filter(f=>f.type==='text'||f.type==='textarea').length + 1;
+      let cN = getPageFields(page).filter(f=>f.type==='checkbox'||f.type==='xbox').length + 1;
+
+      [...newFields, ...dedupCb].forEach(f => {
+        f.name = (f.type==='checkbox'||f.type==='xbox') ? `checkbox_${cN++}` : `text_${tN++}`;
+        const dup = state.fields.some(k =>
+          samePage(k.page,page) &&
+          Math.abs(k.x-f.x)<4 && Math.abs(k.y-f.y)<4 &&
+          Math.abs(k.width-f.width)<6 && Math.abs(k.height-f.height)<6
+        );
+        if(!dup) addField(f);
+      });
+
+      const added = getPageFields(page).length - before;
+      renderAll();
+      msg(added > 0 ? `Detected ${added} new field(s) on page ${page}.` : 'No new fields found. Try adjusting checkbox size/tolerance.', added>0 ? 'ok' : 'warn');
+    } catch(err) {
+      msg('Detection failed: ' + (err.message || err), 'err');
+    }
+  }
+  $('btnDetect').addEventListener('click', detectCurrentPage);
+
+
+  function toPercent(v,total){ return (total ? (v/total*100) : 0).toFixed(3); }
+  function escAttr(v){ return String(v ?? '').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+  function cssPx(v){ return (Math.round((Number(v)||0)*1000)/1000).toString(); }
+  
+function sanitizeUniqueFieldNames(fields){
+  const used = new Map();
+  return fields.map((f, idx) => {
+    let base = String(f.name || '').trim();
+    if (!base) base = `field_${idx+1}`;
+    const safeBase = base.replace(/[^A-Za-z0-9_]/g, '_').replace(/^_+|_+$/g, '') || `field_${idx+1}`;
+    if (!used.has(safeBase)) { used.set(safeBase, 1); return { ...f, _safeName: safeBase, _origName: base }; }
+    const n = used.get(safeBase) + 1; used.set(safeBase, n);
+    return { ...f, _safeName: `${safeBase}_${n}`, _origName: base };
+  });
+}
+function inputMarkup(f, inlinePosStyle=''){
+  const nm = escAttr(f._safeName || f.name || 'field');
+  const tag = escAttr(f.oscarTag || '');
+  const id = escAttr((f._safeName || f.name || 'field') + '_' + (f.id ?? ''));
+  const dbAttr = tag ? ` oscarDB="${tag}"` : '';
+
+  if (f.type === 'textarea') {
+    return `<textarea class="gen_input noborder" id="${id}" name="${nm}"${dbAttr} style="${inlinePosStyle} resize:none;"></textarea>`;
+  }
+  if (f.type === 'checkbox' || f.type === 'xbox') {
+    // X-only marker over printed checkbox outlines: no browser checkbox boundary.
+    // We render as readonly text input that toggles X on click/space/enter.
+    const style = `${inlinePosStyle} border:0; outline:0; box-shadow:none; background:transparent; text-align:center; font-weight:bold; padding:0; margin:0; cursor:pointer;`;
+    return `<input class="xMarkOnly noborder" id="${id}" name="${nm}"${dbAttr} type="text" value="" maxlength="1" readonly="readonly" onclick="this.value=(this.value==='X'?'':'X'); setDirtyFlag&&setDirtyFlag();" onkeydown="if(event.key===' '||event.key==='Enter'){this.value=(this.value==='X'?'':'X'); setDirtyFlag&&setDirtyFlag(); return false;} return false;" style="${style}">`;
+  }
+  // OSCAR compatibility: keep as text input even for date/signature.
+  return `<input class="gen_input noborder" id="${id}" name="${nm}"${dbAttr} type="text" autocomplete="off" style="${inlinePosStyle}">`;
+}
+
+
+
+function preflightChecks(htmlText=''){
+  const out = [];
+  const html = String(htmlText || $('exportEditor').value || '');
+  const hasImagePath = html.includes('${oscar_image_path}');
+
+  out.push({ level: hasImagePath ? 'ok':'err', text: hasImagePath ? 'Image src uses ${oscar_image_path} placeholder.' : 'Missing ${oscar_image_path} in image src(s).' });
+
+  const hasForm = /<form\b/i.test(html);
+  out.push({ level: hasForm ? 'ok':'err', text: hasForm ? 'Form tag detected.' : 'Missing <form> wrapper (required for submit/save).' });
+
+  const hasSubmit = /type=["']submit["']/i.test(html);
+  out.push({ level: hasSubmit ? 'ok':'warn', text: hasSubmit ? 'Submit button detected.' : 'No submit button detected.' });
+
+  const hasOscarDb = /oscarDB\s*=\s*["'][^"']+["']/i.test(html);
+  out.push({ level: hasOscarDb ? 'ok':'warn', text: hasOscarDb ? 'oscarDB tags detected.' : 'No oscarDB tags detected (fields may not autofill).' });
+
+  const names = new Map();
+  state.fields.forEach(f => {
+    const n = String(f.name||'').trim();
+    if (!n) return;
+    names.set(n, (names.get(n)||0)+1);
+  });
+  const dups = [...names.entries()].filter(([k,v])=>v>1);
+
+  // Check that every page with fields has an image loaded
+  const pagesWithFields = [...new Set(state.fields.map(f => Number(f.page)))].sort((a,b)=>a-b);
+  const pagesWithoutImg = pagesWithFields.filter(pg => !state.pages[pg] || !state.pages[pg].naturalW);
+  if (pagesWithoutImg.length)
+    out.push({ level: 'err', text: `Page(s) ${pagesWithoutImg.join(', ')} have fields but no background image loaded.` });
+
+  out.push({ level: dups.length ? 'warn':'ok', text: dups.length ? `Duplicate field names (${dups.length}): ` + dups.slice(0,6).map(([k,v])=>`${k}×${v}`).join(', ') : 'No duplicate field names.' });
+
+  const untagged = state.fields.filter(f => !String(f.oscarTag||'').trim() && f.type !== 'checkbox' && f.type !== 'xbox' && f.type !== 'signature');
+  out.push({ level: untagged.length ? 'warn':'ok', text: untagged.length ? `${untagged.length} field(s) (excluding checkboxes/signature) have no oscarDB tag and won't autofill.` : 'All data fields have oscarDB tags.' });
+
+  const oob = [];
+  state.fields.forEach(f => {
+    const p = state.pages[f.page] || {};
+    const w = Number(p.naturalW)||0, h = Number(p.naturalH)||0;
+    if (!w || !h) return;
+    if (f.x < 0 || f.y < 0 || f.x + f.width > w + 0.001 || f.y + f.height > h + 0.001) oob.push(f);
+  });
+  out.push({ level: oob.length ? 'err':'ok', text: oob.length ? `${oob.length} field(s) are out of page bounds.` : 'All fields are within page bounds.' });
+
+  return out;
+}
+
+function renderPreflight(results){
+    const box = $('preflightBox');
+    if (!box) return;
+    if (!results || !results.length){ box.innerHTML = '<div class="small" style="color:#64748b">Run preflight to see checks.</div>'; return; }
+    box.innerHTML = results.map(r => `<div class="pf-${r.level}" style="margin-bottom:4px">• ${escHtml(r.text)}</div>`).join('');
+  }
+
+  
+function repairImagePlaceholders(){
+  let html = String($('exportEditor').value || '');
+  if (!html.trim()) html = buildExportHtml();
+  // Replace each BGImage src with the correct ${oscar_image_path} placeholder.
+  // Match id="BGImage1", id="BGImage2", etc. and fix their src.
+  let patched = 0;
+  for (let pg = 1; pg <= 10; pg++){
+    const bgIdRe = new RegExp('(<img[^>]*id=["\']BGImage' + pg + '["\'][^>]*src=)["\'][^"\']*["\']', 'i');
+    const bgSrcRe = new RegExp('(<img[^>]*src=)["\'][^"\']*["\']([^>]*id=["\']BGImage' + pg + '["\'])', 'i');
+    const slug = titleSlug() + '_page' + pg + '.png';
+    const replacement = '$1"${oscar_image_path}' + slug + '"';
+    const before = html;
+    html = html.replace(bgIdRe, replacement);
+    if (html === before) html = html.replace(bgSrcRe, '$1"${oscar_image_path}' + slug + '"$2');
+    if (html !== before) patched++;
+  }
+  // Fallback: if no BGImage ids found, patch first unresolved img src
+  if (patched === 0 && !html.includes('${oscar_image_path}')){
+    html = html.replace(/<img([^>]*?)src=["'][^"']*["']([^>]*?)>/i,
+      '<img$1src="${oscar_image_path}' + titleSlug() + '_page1.png"$2>');
+    patched = 1;
+  }
+  $('exportEditor').value = html;
+  msg(patched ? `Repaired ${patched} image placeholder(s).` : 'No image placeholders needed repair.', patched ? 'ok' : 'warn');
+  renderPreflight(preflightChecks(html));
+}
+
+
+
+  function titleSlug(){
+    // Convert eForm title to a safe filename prefix e.g. "SHN MRI Request" -> "shn_mri_request"
+    const t = String(state.exportTitle || 'eform').trim();
+    return t.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'eform';
+  }
+
+function buildExportHtml(){
+  const p1=state.pages[1];
+  if(!p1||!p1.naturalW) throw new Error('Page 1 image is required before export.');
+
+  const isSignatureField = (f) => {
+    const t = String(f.type || '').toLowerCase();
+    const tg = normalizeTag(f.oscarTag || '');
+    return t === 'signature' || tg === 'current_user_signature_image';
+  };
+
+  const includeSnippets=$('chkIncludeSnippets').checked;
+  const includeButtons=$('chkIncludeButtons').checked;
+  const jqueryMode=($('exportJquery') && $('exportJquery').value) || 'modern';
+
+  const EXPORT_W = 750;
+  const exportPages = Object.keys(state.pages).map(Number)
+    .filter(n => state.pages[n] && state.pages[n].naturalW > 0).sort((a,b)=>a-b);
+
+  function scaled(n, s){ return Math.round((Number(n) || 0) * (Number(s) || 1)); }
+
+  function fieldMarkupScaled(f, naturalW, naturalH, scale){
+    const sw = scaled(f.width, scale);
+    const sh = scaled(f.height, scale);
+    const sx = scaled(f.x, scale);
+    const sy = scaled(f.y, scale);
+
+    const x = Math.round(clamp(sx, 0, Math.max(0, scaled(naturalW, scale) - sw)));
+    const y = Math.round(clamp(sy, 0, Math.max(0, scaled(naturalH, scale) - sh)));
+    const w = Math.round(clamp(sw, 6, scaled(naturalW, scale)));
+    const h = Math.round(clamp(sh, 6, scaled(naturalH, scale)));
+    const inlinePos = `position:absolute; left:${x}px; top:${y}px; width:${w}px; height:${h}px; font-family:sans-serif; font-size:12px; background-color:transparent;`;
+    return inputMarkup(f, inlinePos);
+  }
+
+  function signatureMarkup(sigField, naturalW, naturalH, scale, pageNo){
+    if(!sigField) return '';
+    const x = Math.round(clamp(scaled(sigField.x, scale), 0, Math.max(0, scaled(naturalW, scale))));
+    const y = Math.round(clamp(scaled(sigField.y, scale), 0, Math.max(0, scaled(naturalH, scale))));
+    const w = Math.max(40, Math.round(scaled(sigField.width || 150, scale)));
+    const h = Math.max(16, Math.round(scaled(sigField.height || 40, scale)));
+    const divId = pageNo === 1 ? 'CanvasProSignature' : `CanvasProSignature${pageNo}`;
+    const imgId = pageNo === 1 ? 'signature' : `signature${pageNo}`;
+    return `<div id="${divId}" class="sig" style="position:absolute; left:${x}px; top:${y}px;">
+    <img id="${imgId}" name="${imgId}" src="\${oscar_image_path}BNK.png" width="${w}" height="${h}" style="z-index:10;">
+  </div>
+`;
+  }
+
+  function pageMarkup(pageNo, fields, sigField, naturalW, naturalH, bgSrc, scale, hasNext, tailHtml='', afterHtml=''){
+    const breakAfter = hasNext ? 'always' : 'auto';
+    const pageW = scaled(naturalW, scale);
+    const pageH = scaled(naturalH, scale);
+    let out = `<div id="page${pageNo}" style="page-break-after:${breakAfter};position:relative;width:${pageW}px;height:${pageH}px;overflow:hidden;">
+`;
+    out += `<img id="BGImage${pageNo}" src="${escAttr(bgSrc)}" style="position:absolute;left:0;top:0;width:${pageW}px;height:${pageH}px;">
+`;
+    out += signatureMarkup(sigField, naturalW, naturalH, scale, pageNo);
+    fields.forEach(f=>{ out += `<!-- ${escHtml(f.name || f._safeName || 'field')} -->
+${fieldMarkupScaled(f, naturalW, naturalH, scale)}
+`; });
+    if (tailHtml) out += `${tailHtml}
+`;
+    out += `</div>
+`;
+    // afterHtml goes OUTSIDE the overflow:hidden page div (buttons, hidden inputs, etc.)
+    if (afterHtml) out += `${afterHtml}
+`;
+    return out;
+  }
+
+  // Include extracted scripts/snippets, but avoid duplicating core OSCAR control scripts
+  let addonScripts = '';
+  if(includeSnippets){
+    [...state.snippets.externalSrc].forEach(src => {
+      const s = String(src||'');
+      if (/(^|\/)jquery(-migrate)?(-[\d.]+)?(\.min)?\.js/i.test(s)) return;
+      if (/eforms\/printControl\.js/i.test(s)) return;
+      if (/eforms\/faxControl\.js/i.test(s)) return;
+      addonScripts += `<script src="${escAttr(s)}"><\/script>
+`;
+    });
+    state.snippets.inlineScripts.forEach(js => {
+      addonScripts += `<script>
+${js}
+<\/script>
+`;
+    });
+  }
+
+  // Always include core OSCAR/jQuery helpers for compatibility with classic eForms
+  const coreScripts = `
+${jqueryMode === 'legacy' ? '' : `<script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js" integrity="sha384-1H217gwSVyLSIfaLxHbE7dRb3v4mYCKbpQvzx0cegeju1MVsGrX5xXxAvs/HgeFs" crossorigin="anonymous"><\/script>
+<script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/jquery-migrate/3.4.1/jquery-migrate.min.js" integrity="sha384-blTaEWzbMI7nCOIelIDU1hT3BACXx/GqeUx+R7CYDLtUVqTnXYvF3J36PN0oyuxf" crossorigin="anonymous"><\/script>
+<script>if (window.jQuery) jQuery.migrateMute = true;<\/script>
+`}<script>window.jQuery || document.write('<script src="../js/jquery-1.7.1.min.js"><\\/script>')<\/script>
+<script>window.jQuery || document.write('<script src="jquery-1.7.1.min.js"><\\/script>')<\/script>
+
+<script>
+$(document).ready(function() {
+  $('[class^="child-"]').hide();
+  $('.parent-field').click(function() {
+    $('[class^="child-"]').hide();
+    $('.parent-field').each(function() {
+      if ($(this).is('input:checkbox')) {
+        if (this.checked) $('.child-' + $(this).prop('id')).show();
+        else $('.child-' + $(this).val()).show();
+      }
+      if ($(this).is('input:text')) {
+        if ($(this).val() === 'X') $('.child-' + $(this).prop('id')).show();
+        else $('.child-' + $(this).val()).show();
+      }
+    });
+  });
+  $('[class^="only-one-"]').click(function() {
+    if ($(this).is('input:checkbox')) {
+      $('.' + $(this).attr('class')).prop('checked', false);
+      $(this).prop('checked', true);
+    }
+    if ($(this).is('input:text')) {
+      $('.' + $(this).attr('class')).val('');
+      $(this).val('X');
+    }
+  });
+});
+<\/script>
+
+<script type="text/javascript" src="\${oscar_javascript_path}eforms/faxControl.js"><\/script>
+
+<script>
+function formPrint(){ try{ window.print(); }catch(e){} }
+
+var needToConfirm = false;
+document.onkeyup = setDirtyFlag;
+function setDirtyFlag(){ needToConfirm = true; }
+function releaseDirtyFlag(){ needToConfirm = false; }
+window.onbeforeunload = confirmExit;
+function confirmExit(){
+  if (needToConfirm){
+    return "You have attempted to leave this page. If you have made any changes to the fields without clicking the Save button, your changes will be lost. Are you sure you want to exit this page?";
+  }
+}
+if (typeof window.setFaxNo !== 'function') window.setFaxNo = function(){};
+if (typeof window.checkGender !== 'function') window.checkGender = function(){};
+if (typeof window.loadSig !== 'function') window.loadSig = function(){};
+
+function SignForm() {
+  try {
+    var provNum = $('#current_user_id').val();
+    var sig = document.getElementById('signature');
+    if (!sig) return;
+    sig.src = "../eform/displayImage.do?imagefile=consult_sig_" + provNum + ".png";
+    $('#signature').on('error', function() {
+      $(this).hide();
+    });
+    sig.alt = provNum;
+  } catch(e){}
+}
+function getFaxTargetNo(){
+  var ids = ['faxNo','faxno','fax_number','faxnumber','otherFax','toFax'];
+  for (var i=0;i<ids.length;i++){
+    var el = document.getElementById(ids[i]);
+    if (!el) continue;
+    var v = (el.value || '').trim();
+    if (v) return v;
+  }
+  return '';
+}
+function syncFaxNoMirror(){
+  var v = getFaxTargetNo();
+  var h = document.getElementById('faxnumber');
+  if (h) h.value = v;
+}
+function primeFaxNo(){
+  try{
+    var box = document.getElementById('faxNo');
+    if (!box || (box.value && box.value.trim())) { syncFaxNoMirror(); return; }
+    var candidates = ['clinic_fax','referral_fax','family_doctor_fax','current_user_fax','fax'];
+    for (var i=0;i<candidates.length;i++){
+      var el = document.getElementById(candidates[i]);
+      if (!el) continue;
+      var v = (el.value || '').trim();
+      if (v){ box.value = v; break; }
+    }
+    syncFaxNoMirror();
+  }catch(e){}
+}
+function formFax(){
+  try{
+    syncFaxNoMirror();
+    var faxNo = getFaxTargetNo();
+    if (typeof popupPage === 'function') { popupPage('fax', faxNo || ''); return; }
+    if (typeof onEformFax === 'function') { onEformFax(faxNo || ''); return; }
+    if (typeof setFaxNo === 'function') { setFaxNo(); }
+    var fc = document.getElementById('faxControl');
+    if (fc){
+      fc.style.display = 'inline-block';
+      if (fc.children && fc.children.length) return;
+    }
+    alert('Fax control not available in this context.');
+  }catch(e){ alert('Fax control not available in this context.'); }
+}
+function formSubmitAndFax(){
+  try{ primeFaxNo(); }catch(e){}
+  try{ formFax(); }catch(e){}
+  try{ releaseDirtyFlag(); }catch(e){}
+  setTimeout(function(){ var b=document.getElementById('SubmitButton'); if(b) b.click(); }, 350);
+}
+<\/script>
+`;
+
+  let bodyOnloadParts = ['setFaxNo()', 'primeFaxNo()', 'syncFaxNoMirror()', 'SignForm()', 'checkGender()'];
+  if(includeSnippets && state.snippets.onloads.size){
+    [...state.snippets.onloads].forEach(x => {
+      const sx = String(x||'').trim();
+      if (sx && !/^SignForm\(\)\s*;?$/i.test(sx)) bodyOnloadParts.push(sx);
+    });
+  }
+  const bodyOnload = bodyOnloadParts.join('; ');
+
+  const docTitle = (state.exportTitle && String(state.exportTitle).trim()) ? String(state.exportTitle).trim() : 'Generated OSCAR eForm';
+  const docAuthor = String(state.exportAuthor || '').trim();
+
+  // Optional imported button/snippet blocks (fax/print/signature widgets from template)
+  let bottomButtons = '';
+  if (includeButtons) {
+    bottomButtons = `
+<div class="DoNotPrint" id="BottomButtons" style="position:absolute; left:0px;">
+  <input type="hidden" name="faxnumber" id="faxnumber">
+  <input value="Submit" name="SubmitButton" id="SubmitButton" type="submit" onclick="releaseDirtyFlag();">
+  <input value="Fax &amp; Submit" name="SubmitFaxButton" id="SubmitFaxButton" type="button" onclick="formSubmitAndFax();">
+  <input value="Print &amp; Submit" name="PrintSubmitButton" id="PrintSubmitButton" type="button" onclick="formPrint();releaseDirtyFlag();setTimeout(function(){ var b=document.getElementById('SubmitButton'); if(b) b.click(); },1800);">
+  <div id="faxControl" style="display:inline-block; margin-left:6px;"></div>
+</div>
+`;
+  }
+
+  const html = `<html>
+<head>
+<META http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<meta name="viewport" content="width=750, initial-scale=1">
+<title>${escHtml(docTitle)}</title>${docAuthor ? `\n<meta name="author" content="${escAttr(docAuthor)}">` : ''}
+<style type="text/css" media="screen" >
+ body { margin:0; padding:0; }
+ input {
+	-moz-box-sizing: content-box;
+	-webkit-print-color-adjust: exact;
+	-webkit-box-sizing: content-box;
+	box-sizing: content-box
+ }
+/* Drawing the 'gripper' for touch-enabled devices */
+ html.touch #content {
+	float:left;
+	width:92%;
+}
+ html.touch #scrollgrabber {
+	float:right;
+	width:4%;
+	margin-right:2%;
+	background-image:url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAFCAAAAACh79lDAAAAAXNSR0IArs4c6QAAABJJREFUCB1jmMmQxjCT4T/DfwAPLgOXlrt3IwAAAABJRU5ErkJggg==)
+ }
+ html.borderradius #scrollgrabber {
+	border-radius: 1em;
+ }
+ .noborder {
+	border : 0px;
+	background: transparent;
+	overflow: hidden;
+ }
+ .xBox { text-align:center; font-weight:bold; }
+ .sig img { display:block; }
+ .xMarkOnly { -webkit-appearance:none; appearance:none; border:0; background:transparent; text-align:center; font-weight:bold; }
+ html, body { margin:0; padding:0; }
+ img[id^="BGImage"] { display:block; }
+</style>
+<style type="text/css" media="print">
+ .DoNotPrint {
+	display: none;
+ }
+ .noborder {
+	border : 0px;
+	background: transparent;
+	background: transparent;
+	overflow: hidden;
+ }
+ @page { size: auto; margin: 0mm; }
+ html, body { margin:0 !important; padding:0 !important; width:100% !important; }
+ #page1, #page2 { transform-origin: top left; }
+</style>
+${coreScripts}
+${addonScripts}
+</head>
+<body onload="${escAttr(bodyOnload)}">
+<form method="post" action="" name="FormName" id="FormName">
+${(function(){
+  const hiddenCU = '<input type="hidden" id="current_user_id" name="current_user_id" oscarDB="current_user_id">';
+  return exportPages.map((n, idx) => {
+    const p = state.pages[n];
+    const scale = p.naturalW ? (EXPORT_W / p.naturalW) : 1;
+    const allF = sanitizeUniqueFieldNames(getPageFields(n));
+    const sigFields = allF.filter(f => isSignatureField(f));
+    if (sigFields.length > 1) console.warn(`Page ${n}: ${sigFields.length} signature fields found; only the first will be rendered.`);
+    const sig = sigFields[0] || null;
+    const fields = allF.filter(f => !isSignatureField(f));
+    const pName = (p.fileName || (titleSlug()+'_page'+n+'.png')).replace(/^\/+/, '');
+    const pSrc = '${oscar_image_path}' + pName;
+    const isLast = idx === exportPages.length - 1;
+    const tailHtml = '';
+    const afterHtml = isLast ? (bottomButtons || '') + '\n' + hiddenCU : '';
+    return pageMarkup(n, fields, sig, p.naturalW, p.naturalH, pSrc, scale, !isLast, tailHtml, afterHtml);
+  }).join('');
+})()}
+</form>
+</body>
+</html>`;
+
+  return stripPdfControls(html);
+}
+
+function buildOscarProperties(htmlFileName='generated_oscar_eform.html'){
+  const title = (state.exportTitle && String(state.exportTitle).trim()) ? String(state.exportTitle).trim() : 'Generated OSCAR eForm';
+  const author = String(state.exportAuthor || '').trim();
+  const now = new Date();
+  const mm = String(now.getMonth()+1).padStart(2,'0');
+  const dd = String(now.getDate()).padStart(2,'0');
+  const yyyy = now.getFullYear();
+  const iso = `${yyyy}-${mm}-${dd}`;
+  return [
+    '#',
+    '# Generated by EForm Mapper',
+    `form.details=${title}`,
+    `form.date=${iso}`,
+    `form.name=${title}`,
+    `form.htmlFilename=${htmlFileName}`,
+    ...(author ? [`form.author=${author}`] : [])
+  ].join('\n') + '\n';
+}
+
+async function downloadOscarPackage(){
+  try {
+    if (typeof JSZip === 'undefined') throw new Error('JSZip library not loaded.');
+    const html = getEditorHtml();
+    const htmlFileName = 'generated_oscar_eform.html';
+    const zip = new JSZip();
+    zip.file(htmlFileName, html);
+    zip.file('eform.properties', buildOscarProperties(htmlFileName));
+
+    // Include all page background images
+    Object.keys(state.pages).map(Number).sort((a,b)=>a-b).forEach(pg => {
+      const p = state.pages[pg];
+      if (p && p.imgData){
+        const fn = (p.fileName || (titleSlug()+'_page'+pg+'.png')).replace(/^\/+/, '');
+        const b64 = String(p.imgData).split(',')[1] || '';
+        if (b64) zip.file(fn, b64, {base64:true});
+      }
+    });
+
+    const blob = await zip.generateAsync({type:'blob'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'oscar_eform_package.zip';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url), 1200);
+    msg('Downloaded oscar_eform_package.zip (HTML + eform.properties + images).', 'ok');
+  } catch (err) {
+    msg('OSCAR package download failed: ' + (err.message || err), 'err');
+  }
+}
+
+function buildDraftIntoEditor(){ try{ $('exportEditor').value = buildExportHtml(); msg('Built export HTML draft in editor.', 'ok'); }catch(err){ msg('Build failed: ' + (err.message || err), 'err'); }}
+
+  function stripPdfControls(html){
+    let s = String(html || '');
+    // Remove any control element (input/button/a) that references PDF in text or attributes.
+    s = s.replace(/<input\b[^>]*>/gi, m => (/pdf/i.test(m) ? '' : m));
+    s = s.replace(/<button\b[^>]*>[\s\S]*?<\/button>/gi, m => (/pdf/i.test(m) ? '' : m));
+    s = s.replace(/<a\b[^>]*>[\s\S]*?<\/a>/gi, m => (/pdf/i.test(m) ? '' : m));
+
+    // Remove common PDF helper JS hooks/functions if present in imported snippets.
+    s = s.replace(/\bformSubmitAndPdf\s*\([^)]*\)\s*;?/gi, '');
+    s = s.replace(/\bformPDF\s*\([^)]*\)\s*;?/gi, '');
+    s = s.replace(/function\s+formSubmitAndPdf\s*\([\s\S]*?\}\s*/gi, '');
+    s = s.replace(/function\s+formPDF\s*\([\s\S]*?\}\s*/gi, '');
+    return s;
+  }
+
+  function getEditorHtml(){ const txt=$('exportEditor').value||''; return stripPdfControls(txt.trim() ? txt : buildExportHtml()); }
+  async function copyExport(){ try{ await navigator.clipboard.writeText(getEditorHtml()); msg('Copied OSCAR HTML draft to clipboard.', 'ok'); }catch(err){ msg('Copy failed: ' + (err.message || err), 'err'); }}
+  function downloadExport(){ try{ const html=getEditorHtml(); const blob=new Blob([html],{type:'text/html'}); const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download='generated_oscar_eform.html'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),1000); msg('Downloaded generated_oscar_eform.html','ok'); }catch(err){ msg('Download failed: ' + (err.message || err), 'err'); }}
+  $('btnBuildDraft').addEventListener('click', buildDraftIntoEditor);
+  
+  $('btnCopyHtml').addEventListener('click', copyExport);
+  $('btnDownloadHtml').addEventListener('click', downloadExport);
+  if ($('btnDownloadOscarZip')) $('btnDownloadOscarZip').addEventListener('click', downloadOscarPackage);
+
+  if ($('btnPreflight')) $('btnPreflight').addEventListener('click', ()=>{
+    const html = $('exportEditor').value || '';
+    const results = preflightChecks(html);
+    renderPreflight(results);
+  });
+  if ($('btnInsertPlaceholders')) $('btnInsertPlaceholders').addEventListener('click', repairImagePlaceholders);
+
+  if ($('eformTitle')) {
+    $('eformTitle').value = state.exportTitle;
+    $('eformTitle').addEventListener('input', (e)=>{
+      const v = String(e.target.value || '').trim();
+      state.exportTitle = v || 'Generated OSCAR eForm';
+    });
+  }
+  if ($('eformAuthor')) {
+    $('eformAuthor').addEventListener('input', (e)=>{
+      state.exportAuthor = String(e.target.value || '').trim();
+    });
+  }
+
+  function initConverter(){
+    const c = {
+      file: $('convFile'),
+      mode: $('convMode'),
+      page: $('convPage'),
+      width: $('convWidth'),
+      gray: $('convGray'),
+      opt: $('convOpt'),
+      strip: $('convStrip'),
+      levels: $('convLevels'),
+      btnPreview: $('btnConvPreview'),
+      btnConvertDownload: $('btnConvConvertDownload'),
+      btnLoadOnly: $('btnConvLoadOnly'),
+      btnConvertAll: $('btnConvConvertAll'),
+      btnClear: $('btnConvClear'),
+      status: $('convStatus'),
+      preview: $('convPreview'),
+      links: $('convLinks'),
+      canvas: $('convCanvas')
+    };
+    if (!c.file) return;
+    let pdfDoc = null;
+    let busy = false;
+    let previewUrl = null;
+    const cctx = c.canvas.getContext('2d', {willReadFrequently:true});
+
+    function cstatus(t, err=false){ c.status.textContent = t || ''; c.status.style.color = err ? '#b91c1c' : '#374151'; }
+    function setBusy(v){
+      busy = v;
+      const disabled = v || !pdfDoc;
+      c.btnPreview.disabled = disabled;
+      c.btnConvertDownload.disabled = disabled;
+      c.btnLoadOnly.disabled = disabled;
+      c.btnConvertAll.disabled = disabled;
+    }
+    function safe(n){ return String(n||'form').replace(/\.[^/.]+$/,'').replace(/[^\w\-]+/g,'_').replace(/^_+|_+$/g,'')||'form'; }
+    function ext(){ return 'png'; }
+    function bytes(n){ if(n<1024) return `${n} B`; if(n<1024*1024) return `${(n/1024).toFixed(1)} KB`; return `${(n/1048576).toFixed(2)} MB`; }
+    function lv(){ const v=Number(c.levels.value); return Number.isFinite(v)?Math.max(8,Math.min(64,Math.round(v))):24; }
+    function wTarget(){ const v=Number(c.width.value); return Number.isFinite(v)?Math.max(200,Math.min(1500,Math.round(v))):1500; }
+    function fname(prefix,pageN,ex){ return `${prefix}_page-${String(pageN).padStart(3,'0')}.${ex}`; }
+
+    function addLink(blob, name, auto=true){
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = name; a.textContent = `${name} (${bytes(blob.size)})`; a.className='list-item';
+      c.links.prepend(a);
+      if (auto){
+        try{ const t=document.createElement('a'); t.href=url; t.download=name; document.body.appendChild(t); t.click(); t.remove(); }catch(_){}
+      }
+      return url;
+    }
+
+    async function blobToDataUrl(blob){
+      return new Promise((resolve, reject) => {
+        const fr = new FileReader();
+        fr.onload = e => resolve(e.target.result);
+        fr.onerror = () => reject(fr.error || new Error('Failed to read blob'));
+        fr.readAsDataURL(blob);
+      });
+    }
+
+    async function loadBlobIntoMapper(pageNo, blob, fileName='', pdfPage=null){
+      const page = Number(pageNo) >= 1 ? Number(pageNo) : 1;
+      const dataUrl = await blobToDataUrl(blob);
+      const img = await loadImage(dataUrl);
+      if (!state.pages[page]){ state.pages[page]={imgData:null,naturalW:0,naturalH:0,fileName:''}; createPageDOM(page); }
+      const resolvedName = fileName || state.pages[page].fileName || (titleSlug()+'_page'+page+'.png');
+      state.pages[page] = {
+        imgData: dataUrl,
+        naturalW: img.naturalWidth || img.width || 0,
+        naturalH: img.naturalHeight || img.height || 0,
+        fileName: resolvedName,
+        pdfPage: pdfPage || null
+      };
+      const imgEl = $('img'+page);
+      if (imgEl) imgEl.src = dataUrl;
+    }
+
+    // Prefer the local worker. Browsers refuse Web Workers from file:// pages, so there the
+    // worker script is loaded into the page and pdf.js runs it on the main thread instead.
+    let pdfWorkerReady = null;
+    function ensurePdfWorker(){
+      if (pdfWorkerReady) return pdfWorkerReady;
+      const LOCAL = 'vendor/pdf.worker.min.js';
+      const CDN = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+      const CDN_SRI = 'sha384-SnzOobpRMLXZ52iJvZm/C0fYw0OQemTXzTjIsdsfMcrCtCEe9qgzxTd3RSklO5x2';
+      const addScript = (src, integrity) => new Promise((resolve, reject) => {
+        const el = document.createElement('script');
+        el.src = src;
+        if (integrity){ el.integrity = integrity; el.crossOrigin = 'anonymous'; }
+        el.onload = resolve; el.onerror = reject;
+        document.head.appendChild(el);
+      });
+      pdfWorkerReady = (async () => {
+        if (pdfjsLib.GlobalWorkerOptions.workerSrc || window.pdfjsWorker) return;
+        if (location.protocol !== 'file:'){
+          const ok = await fetch(LOCAL, { method:'HEAD' }).then(r => r.ok).catch(() => false);
+          pdfjsLib.GlobalWorkerOptions.workerSrc = ok ? LOCAL : CDN;
+          return;
+        }
+        try { await addScript(LOCAL); }
+        catch(e){ await addScript(CDN, CDN_SRI); }
+      })();
+      return pdfWorkerReady;
+    }
+
+    async function loadPdf(file){
+      if (!window.pdfjsLib){ cstatus('pdf.js failed to load (vendor/ folder missing and CDN unreachable).', true); return; }
+      try{
+        setBusy(true);
+        cstatus('Loading PDF...');
+        const arr = await file.arrayBuffer();
+        fsCapturePdf(file.name, arr.slice(0));
+        await ensurePdfWorker();
+        pdfDoc = await pdfjsLib.getDocument({data:arr, standardFontDataUrl:'vendor/standard_fonts/'}).promise;
+        c.page.innerHTML = '';
+        for(let i=1;i<=pdfDoc.numPages;i++){
+          const o=document.createElement('option'); o.value=String(i); o.textContent=`Page ${i}`; c.page.appendChild(o);
+        }
+        c.page.disabled = false;
+        cstatus(`Loaded ${pdfDoc.numPages} page(s).`);
+        await renderPreview();
+      }catch(err){ cstatus('Could not read PDF: ' + (err.message || err), true); }
+      finally{ setBusy(false); }
+    }
+
+    function post(){
+      const doGray = c.gray.checked, doOpt = c.opt.checked, strip = c.strip.checked;
+      const levels = lv(), step = levels>1 ? 255/(levels-1) : 255;
+      const img = cctx.getImageData(0,0,c.canvas.width,c.canvas.height), d = img.data;
+      for(let i=0;i<d.length;i+=4){
+        const r=d[i], g=d[i+1], b=d[i+2];
+        if(doGray){
+          let gray=Math.round(0.299*r+0.587*g+0.114*b);
+          if(doOpt) gray=Math.round(gray/step)*step;
+          d[i]=d[i+1]=d[i+2]=gray;
+        }else if(doOpt){
+          d[i]=Math.round(r/step)*step; d[i+1]=Math.round(g/step)*step; d[i+2]=Math.round(b/step)*step;
+        }
+        if(strip) d[i+3]=255;
+      }
+      cctx.putImageData(img,0,0);
+    }
+
+    async function renderPdfPage(num){
+      if (!pdfDoc) throw new Error('No PDF loaded');
+      const page = await pdfDoc.getPage(num);
+      const base = page.getViewport({scale:1});
+      const outW = wTarget();
+      const scale = outW / base.width;
+      const vp = page.getViewport({scale});
+      c.canvas.width = Math.max(1, Math.floor(vp.width));
+      c.canvas.height = Math.max(1, Math.floor(vp.height));
+      if (c.strip.checked){ cctx.fillStyle='#fff'; cctx.fillRect(0,0,c.canvas.width,c.canvas.height); }
+      else cctx.clearRect(0,0,c.canvas.width,c.canvas.height);
+
+      await page.render({ canvasContext:cctx, viewport:vp, background:c.strip.checked?'rgb(255,255,255)':'rgba(0,0,0,0)' }).promise;
+      post();
+      return {w:c.canvas.width,h:c.canvas.height};
+    }
+
+    async function toBlob(){
+      return new Promise(resolve => c.canvas.toBlob(resolve, 'image/png'));
+    }
+
+    async function renderPreview(){
+      if(!pdfDoc || busy) return;
+      try{
+        setBusy(true);
+        const pnum = Number(c.page.value || 1);
+        cstatus('Rendering preview...');
+        const dim = await renderPdfPage(pnum);
+        const blob = await toBlob();
+        if (!blob) throw new Error('Preview blob failed');
+        if (previewUrl) URL.revokeObjectURL(previewUrl);
+        previewUrl = URL.createObjectURL(blob);
+        c.preview.src = previewUrl;
+        cstatus(`Preview ready — ${dim.w}×${dim.h}px (${bytes(blob.size)}).`);
+      }catch(err){ cstatus('Preview failed: ' + (err.message || err), true); }
+      finally{ setBusy(false); }
+    }
+
+    async function convertCore(download){
+      c.links.innerHTML = '';
+      const prefix = safe(c.file.files?.[0]?.name || 'form');
+      const outputs = [];
+
+      if(c.mode.value === 'single'){
+        const pnum = Number(c.page.value || 1);
+        const dim = await renderPdfPage(pnum);
+        const blob = await toBlob();
+        if(!blob) throw new Error('Blob failed');
+        const name = fname(prefix,pnum,'png');
+        addLink(blob, name, !!download);
+        outputs.push({ page:pnum, blob, name, dim });
+      } else {
+        const total = pdfDoc.numPages;
+        for(let p=1;p<=total;p++){
+          cstatus(`Converting ${p}/${total}...`);
+          await renderPdfPage(p);
+          const blob = await toBlob();
+          if(!blob) throw new Error(`Page ${p} failed`);
+          const name = fname(prefix,p,'png');
+          addLink(blob, name, !!download);
+          outputs.push({ page:p, blob, name, dim:{w:c.canvas.width, h:c.canvas.height} });
+        }
+      }
+      return outputs;
+    }
+
+    async function loadOutputsIntoMapper(outputs){
+      if(!outputs || !outputs.length){
+        throw new Error('Nothing to load. Convert first.');
+      }
+      let loaded = 0;
+
+      if(c.mode.value === 'single'){
+        const targetPage = state.currentPage >= 1 ? state.currentPage : 1;
+        await loadBlobIntoMapper(targetPage, outputs[0].blob, titleSlug()+'_page'+targetPage+'.png', outputs[0].page);
+        loaded = 1;
+        setCurrentPage(targetPage);
+      } else {
+        for (const out of outputs){
+          if (out.page >= 1 && out.page <= 10){
+            if (out.page > 1 && !state.pages[out.page] && getPageCount() < out.page) addPage();
+            await loadBlobIntoMapper(out.page, out.blob, titleSlug()+'_page'+out.page+'.png', out.page);
+            loaded++;
+          }
+        }
+        if (loaded) setCurrentPage(1);
+      }
+
+      renderAll();
+      cstatus(`Loaded ${loaded} page(s) into mapper.`);
+    }
+
+    async function runConvertAction(opts){
+      if(!pdfDoc || busy) return;
+      const { download=false, load=false } = opts || {};
+      try{
+        setBusy(true);
+        cstatus('Converting...');
+        const outputs = await convertCore(download);
+        const pagesText = outputs.length === 1 ? '1 page' : `${outputs.length} pages`;
+        if(load){
+          await loadOutputsIntoMapper(outputs);
+          cstatus(`Done: ${pagesText} converted, downloaded, and loaded.`);
+        } else {
+          cstatus(`Done: ${pagesText} converted${download ? ' and download triggered' : ''}.`);
+        }
+      }catch(err){
+        cstatus('Conversion failed: ' + (err.message || err), true);
+      }finally{
+        setBusy(false);
+        await renderPreview();
+      }
+    }
+
+    async function runLoadOnly(){
+      if(!pdfDoc || busy) return;
+      try{
+        setBusy(true);
+        cstatus('Converting for load...');
+        const outputs = await convertCore(false);
+        await loadOutputsIntoMapper(outputs);
+      }catch(err){
+        cstatus('Load failed: ' + (err.message || err), true);
+      }finally{
+        setBusy(false);
+        await renderPreview();
+      }
+    }
+
+    c.file.addEventListener('change', e => {
+      const f=e.target.files && e.target.files[0];
+      if(!f) return;
+      if(f.type !== 'application/pdf'){ cstatus('Please choose a PDF file.', true); return; }
+      loadPdf(f);
+    });
+    [c.mode,c.page,c.width,c.gray,c.opt,c.strip,c.levels].forEach(el => el.addEventListener('change', ()=>{ if(pdfDoc) renderPreview(); }));
+    c.btnPreview.addEventListener('click', renderPreview);
+    c.btnConvertDownload.addEventListener('click', ()=> runConvertAction({download:true, load:false}));
+    c.btnLoadOnly.addEventListener('click', runLoadOnly);
+    c.btnConvertAll.addEventListener('click', ()=> runConvertAction({download:true, load:true}));
+    c.btnClear.addEventListener('click', ()=>{ c.links.innerHTML=''; cstatus('Cleared links.'); });
+
+    cstatus('Converter ready (PNG output). Use Convert+Download or Load to Mapper.');
+  }
+
+  createPageDOM(1);
+  if ($('btnAddPage')) $('btnAddPage').addEventListener('click', addPage);
+  if ($('btnRemovePage')) $('btnRemovePage').addEventListener('click', removePage);
+
+  mountConverterTop();
+  initDetectionTuningCollapse();
+  initConverter();
+  updateUndoBtn();
+
+  try{
+    console.assert(norm('Patient Name')==='patient_name', 'norm test');
+    console.assert(guessTag('DOB')==='dobc2' || guessTag('DOB')==='patient_dob' || guessTag('DOB')==='dob', 'tag DOB');
+    console.assert(guessTag('Patient phone')==='phone' || guessTag('Patient phone')==='patient_phone', 'tag phone');
+    console.assert(clamp(12,0,10)===10, 'clamp');
+    console.assert([ {page:'1'},{page:1},{page:2} ].filter(f=>Number(f.page)===1).length===2, 'page numeric match');
+    console.assert(parseStylePx('left:12px;top:44px','left').val===12, 'parse left');
+    console.assert(intersects({left:0,top:0,right:10,bottom:10},{left:5,top:5,right:11,bottom:11})===true, 'intersects');
+
+    // Added tests for checkbox geometry helpers
+    const testArr = new Uint8Array([
+      1,1,1,1,
+      1,0,0,1,
+      1,0,0,1,
+      1,1,1,1
+    ]);
+    const ec = edgeCoverage(testArr,4,4,0,0,3,3,1);
+    console.assert(ec.top>=1 && ec.bottom>=1 && ec.left>=1 && ec.right>=1, 'edgeCoverage box');
+    const crn = cornerPresence(testArr,4,4,0,0,3,3,1);
+    console.assert(crn.length===4 && crn.every(v=>v>=1), 'corner presence');
+    console.assert(countOnInRect(testArr,4,4,0,0,3,3)===12, 'countOnInRect');
+    console.assert(parseTagText('a\nb,c;d').length===4, 'parseTagText');
+    console.assert(normalizeTag(' Patient Name ')==='Patient_Name', 'normalizeTag');
+    console.assert(isRemovedTag('signature')===true, 'removed tag signature');
+    console.assert(guessTag('signature')==='current_user_signature_image' || guessTag('signature')==='', 'signature guess');
+    console.assert(typeof updateUndoBtn === 'function', 'undo fn exists');
+    console.assert(samePage('1',1)===true && samePage(2,'2')===true, 'samePage coercion');
+    console.assert(getPageFields(1).every(f=>Number(f.page)===1), 'getPageFields numeric page');
+  }catch(_){ }
+
+  refreshTagCatalogUI();
+  if ($('chkSnap')) $('chkSnap').checked = !!state.snap.enabled;
+  if ($('snapPx')) $('snapPx').value = String(state.snap.threshold || 8);
+  if ($('chkGuides')) $('chkGuides').checked = !!state.snap.showGuides;
+  renderPreflight([]);
+
+
+  // ===================== FreeScribe connection (added by FreeScribe) =====================
+  // Opened from FreeScribe, the page can ask FreeScribe (a server on this computer only) to
+  // read the PDF the form came from and place fields exactly where the PDF draws them.
+  // Opened as a plain file, the panel stays hidden and nothing here runs.
+  state.sourcePdf = state.sourcePdf || null;
+  const FS = { token: '', busy: false };
+
+  function fsBytesToBase64(buffer){
+    const bytes = new Uint8Array(buffer);
+    let binary = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return btoa(binary);
+  }
+  function fsCapturePdf(name, buffer){
+    try { state.sourcePdf = { name: String(name || 'form.pdf'), data: fsBytesToBase64(buffer) }; }
+    catch(_){ state.sourcePdf = null; }
+    fsShowPdf();
+  }
+  function fsShowPdf(){
+    const el = $('fsPdfName');
+    if (!el) return;
+    el.textContent = state.sourcePdf ? `Source PDF: ${state.sourcePdf.name}`
+                                     : 'No source PDF yet. Load the form with the PDF→Image Tool, or choose it:';
+  }
+  async function fsRequest(path, body){
+    const headers = { 'X-FreeScribe-Token': FS.token };
+    if (body) headers['Content-Type'] = 'application/json';
+    const res = await fetch(path, { method: body ? 'POST' : 'GET', headers, body: body ? JSON.stringify(body) : undefined, cache: 'no-store' });
+    let data = {};
+    try { data = await res.json(); } catch(_){}
+    if (!res.ok) throw new Error(data.error || `FreeScribe answered ${res.status}.`);
+    return data;
+  }
+  function fsTargetPages(){
+    const loaded = Object.keys(state.pages).map(Number).filter(n => state.pages[n] && state.pages[n].imgData).sort((a,b) => a-b);
+    if ($('fsScope').value === 'all') return loaded;
+    return loaded.includes(Number(state.currentPage)) ? [Number(state.currentPage)] : [];
+  }
+  async function fsFindFields(){
+    if (FS.busy) return;
+    if (!state.sourcePdf){ msg('Choose the PDF this form came from first.', 'warn'); $('fsPdfFile').click(); return; }
+    const pages = fsTargetPages();
+    if (!pages.length){ msg('Load the form pages first (PDF→Image Tool).', 'warn'); return; }
+    const replace = $('fsReplace').checked;
+    const before = state.fields.filter(f => pages.includes(Number(f.page))).length;
+    const kept = replace ? state.fields.filter(f => !pages.includes(Number(f.page))) : state.fields;
+    FS.busy = true; $('btnFsDetect').disabled = true;
+    msg('FreeScribe is reading the PDF…');
+    try{
+      const res = await fsRequest('/api/detect', {
+        pdf: state.sourcePdf.data,
+        pages: pages.map(n => ({ page: n, pdfPage: state.pages[n].pdfPage || n,
+                                 naturalW: state.pages[n].naturalW, naturalH: state.pages[n].naturalH })),
+        tagCatalog: [...state.tagCatalog],
+        takenNames: kept.map(f => f.name)
+      });
+      const found = res.fields || [];
+      pushUndo();
+      if (replace) state.fields = kept;
+      found.forEach(f => addField({ page: f.page, x: f.x, y: f.y, width: f.width, height: f.height, type: f.type,
+                                    name: f.name, oscarTag: f.oscarTag || '', label: f.label || '' }));
+      state.selected.clear();
+      renderAll();
+      const boxes = found.filter(f => f.type === 'checkbox').length;
+      const tagged = found.filter(f => f.oscarTag).length;
+      const where = pages.length === 1 ? `page ${pages[0]}` : `${pages.length} pages`;
+      const replaced = replace && before ? ` Replaced the ${before} field(s) that were there (Undo brings them back).` : '';
+      msg(found.length
+          ? `Found ${found.length} field(s) on ${where}: ${boxes} checkbox(es) and ${found.length - boxes} other. ${tagged} tagged from their labels.${replaced} Check them before exporting.`
+          : `No fields found on ${where}.`, found.length ? 'ok' : 'warn');
+    }catch(err){ msg('Find fields from PDF failed: ' + (err.message || err), 'err'); }
+    finally{ FS.busy = false; $('btnFsDetect').disabled = false; }
+  }
+  async function fsConnect(){
+    const match = /(?:^|[#&])fs=([A-Za-z0-9_-]+)/.exec(location.hash || '');
+    let token = match ? match[1] : '';
+    try { if (token) sessionStorage.setItem('fsToken', token); else token = sessionStorage.getItem('fsToken') || ''; } catch(_){}
+    if (match){ try { history.replaceState(null, '', location.pathname + location.search); } catch(_){} }
+    if (!token || location.protocol === 'file:') return;
+    FS.token = token;
+    $('fsPanel').hidden = false;
+    try{
+      await fsRequest('/api/status');
+      $('fsStatus').textContent = 'Connected';
+      fsShowPdf();
+    }catch(_){
+      $('fsStatus').textContent = 'Not connected. Open the mapper again from FreeScribe.';
+      $('btnFsDetect').disabled = true;
+    }
+  }
+  $('btnFsDetect').addEventListener('click', fsFindFields);
+  $('btnFsPickPdf').addEventListener('click', () => $('fsPdfFile').click());
+  $('fsPdfFile').addEventListener('change', async (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    try { fsCapturePdf(file.name, await file.arrayBuffer()); msg(`Source PDF set to ${file.name}.`, 'ok'); }
+    catch(err){ msg('Could not read that PDF: ' + (err.message || err), 'err'); }
+    finally { e.target.value = ''; }
+  });
+  fsConnect();
+  // =================== end of FreeScribe connection ===================
+
+  setCurrentPage(1);
+  renderAll();
+})();
+</script>
+
+</body>
+</html>
