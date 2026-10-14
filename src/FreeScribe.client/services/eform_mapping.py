@@ -14,8 +14,8 @@ FreeScribe reads that and returns:
 * a label for each, from the words printed beside it, and a name made from it
 * the OSCAR database tag (``oscarDB``) where the label makes it obvious
   (patient name, date of birth, health card ...), always from the mapper's tag list.
-  :func:`suggest_tags` can also ask the AI model about the rest; that is not
-  switched on yet.
+  :func:`suggest_tags` asks the AI model about the rest, and keeps only answers
+  from the tag list that fit the label.
 
 Coordinates: the mapper stores fields in pixels of its page image
 (``naturalW`` x ``naturalH``); PDF pages are measured in points. Each mapper page

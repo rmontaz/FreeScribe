@@ -3316,7 +3316,7 @@ function buildDraftIntoEditor(){ try{ $('exportEditor').value = buildExportHtml(
     const before = state.fields.filter(f => pages.includes(Number(f.page))).length;
     const kept = replace ? state.fields.filter(f => !pages.includes(Number(f.page))) : state.fields;
     FS.busy = true; $('btnFsDetect').disabled = true;
-    msg('FreeScribe is reading the PDF…');
+    msg('FreeScribe is reading the PDF and suggesting tags… (the AI step can take a little while)');
     try{
       const res = await fsRequest('/api/detect', {
         pdf: state.sourcePdf.data,
@@ -3333,11 +3333,13 @@ function buildDraftIntoEditor(){ try{ $('exportEditor').value = buildExportHtml(
       state.selected.clear();
       renderAll();
       const boxes = found.filter(f => f.type === 'checkbox').length;
-      const tagged = found.filter(f => f.oscarTag).length;
+      const byRules = found.filter(f => f.oscarTag && f.source !== 'ai').length;
+      const byAI = found.filter(f => f.oscarTag && f.source === 'ai').length;
+      const tagNote = `${byRules} tagged from their labels` + (byAI ? `, ${byAI} tag(s) suggested by the AI (check those)` : '') + '.';
       const where = pages.length === 1 ? `page ${pages[0]}` : `${pages.length} pages`;
       const replaced = replace && before ? ` Replaced the ${before} field(s) that were there (Undo brings them back).` : '';
       msg(found.length
-          ? `Found ${found.length} field(s) on ${where}: ${boxes} checkbox(es) and ${found.length - boxes} other. ${tagged} tagged from their labels.${replaced} Check them before exporting.`
+          ? `Found ${found.length} field(s) on ${where}: ${boxes} checkbox(es) and ${found.length - boxes} other. ${tagNote}${replaced} Check them before exporting.`
           : `No fields found on ${where}.`, found.length ? 'ok' : 'warn');
     }catch(err){ msg('Find fields from PDF failed: ' + (err.message || err), 'err'); }
     finally{ FS.busy = false; $('btnFsDetect').disabled = false; }

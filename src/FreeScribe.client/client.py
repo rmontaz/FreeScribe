@@ -2330,9 +2330,20 @@ def _chat_thread(session, prompt_text, mapping):
 eform_mapper_server = None
 
 
+def _ask_llm_for_tags(prompt):
+    """The AI's suggestion of OSCAR tags for labels the rules can't settle (blank form labels, no patient data)."""
+    try:
+        reply = send_text_to_chatgpt(prompt)
+    except Exception as e:
+        logger.exception(f"eForm tag suggestion failed: {e}")
+        return ""
+    return "" if is_llm_error(reply) else reply
+
+
 def _detect_eform_fields(payload):
     from services import eform_mapping
-    return eform_mapping.detect(payload)
+    # Labels the rules settle are tagged at once; only the uncertain ones go to the AI
+    return eform_mapping.detect(payload, ask_llm=_ask_llm_for_tags)
 
 
 def open_eform_mapper():
