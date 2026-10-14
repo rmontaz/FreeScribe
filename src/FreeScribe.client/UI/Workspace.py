@@ -280,6 +280,12 @@ class Workspace:
 
         nav = tk.Frame(footer, bg=bg)
         nav.pack(fill="x", padx=Theme.px(8), pady=(Theme.px(8), Theme.px(2)))
+        if "fill_form" in self.actions:
+            self.fill_form_button = Button(nav, text="Fill PDF form", icon_name="edit", variant="ghost-strong",
+                                           size="sm", stretch=True, align="left", surface=bg,
+                                           tooltip="Fill a PDF form from the open session",
+                                           command=lambda: self._act("fill_form") if not self.locked else None)
+            self.fill_form_button.pack(fill="x")
         if "open_eform_mapper" in self.actions:
             self.mapper_button = Button(nav, text="eForm mapper", icon_name="doc", variant="ghost-strong", size="sm",
                                         stretch=True, align="left", surface=bg,
@@ -385,7 +391,7 @@ class Workspace:
 
         self.add_doc_button = Button(self.tabs.trailing, icon_name="plus", variant="ghost", size="sm", surface=bg,
                                      command=self._open_document_menu,
-                                     tooltip="Create a document or fill a PDF form from this session")
+                                     tooltip="Create another document from this session")
         self.add_doc_button.pack(side="left", pady=Theme.px(3))
 
         actions = self.tabs.actions
@@ -592,6 +598,7 @@ class Workspace:
         self.store.prune_empty()
         session = self.store.new()
         self.select_session(session)
+        self._start_with_default_template()
         self._rebuild_session_list()
         self.session_list.scroll_to_top()
         return session
@@ -1078,8 +1085,10 @@ class Workspace:
         idle = not self.locked and not self.is_recording
         self._fit_toolbar()
         self.generate_button.set_enabled(idle and has_transcript)
-        has_content = has_transcript or bool(session.note.strip() or session.context.strip())
-        self.add_doc_button.set_enabled(idle and has_content)
+        self.add_doc_button.set_enabled(idle and has_transcript)
+        if hasattr(self, "fill_form_button"):
+            has_content = has_transcript or bool(session.note.strip() or session.context.strip())
+            self.fill_form_button.set_enabled(idle and has_content)
         self.template_button.set_enabled(idle)
         has_text = bool(self.current_page().get_text().strip())
         self.copy_button.set_enabled(has_text)
@@ -1113,10 +1122,15 @@ class Workspace:
         if self.locked:
             return
         current = NoteStyleSelector.current_style
+        default = NoteStyleSelector.default_style
         items = [{"label": "Note template", "header": True}]
         for name in NoteStyleSelector.template_names():
-            items.append({"label": name, "checked": name == current,
-                          "command": lambda n=name: self._choose_template(n)})
+            shown = name.replace(" - Default", "")
+            items.append({"label": f"{shown}   (default)" if name == default else shown,
+                          "checked": name == current, "command": lambda n=name: self._choose_template(n)})
+        # Unticked, so it lines up with the template names
+        items.append({"label": f"Make \u201c{current.replace(' - Default', '')}\u201d the default",
+                      "checked": False, "command": self._make_default_template, "enabled": current != default})
         items.append(None)
         items.append({"label": "New template…", "command": self._add_template})
         protected = NoteStyleSelector.is_protected(current)
@@ -1151,6 +1165,16 @@ class Workspace:
             elif self.current is not None and self.current.note.strip():
                 self.toast(f"Template set to {name}. Regenerate to apply it.", icon_name="doc")
 
+    def _make_default_template(self):
+        name = NoteStyleSelector.current_style
+        if NoteStyleSelector.set_default(name):
+            self.toast(f"New sessions will use {name.replace(' - Default', '')}")
+
+    def _start_with_default_template(self):
+        """A new session starts with the default template."""
+        NoteStyleSelector.use_default()
+        self._apply_note_mode()
+
     def _add_template(self):
         selector = self._template_selector()
         name = selector.add_style()
@@ -1171,13 +1195,10 @@ class Workspace:
     def _open_document_menu(self):
         if self.locked or self.current is None:
             return
-        has_transcript = bool(self.current.transcript.strip())
         items = [{"label": "Create a document from this session", "header": True}]
         for name in NoteStyleSelector.template_names():
-            items.append({"label": name.replace(" - Default", ""), "enabled": has_transcript,
+            items.append({"label": name.replace(" - Default", ""),
                           "command": lambda n=name: self._act("generate_document", n)})
-        items.append(None)
-        items.append({"label": "Fill a PDF form…", "command": lambda: self._act("fill_form")})
         popup_menu(self.add_doc_button, items)
 
     def _rebuild_document_tabs(self):
@@ -1363,6 +1384,7 @@ class Workspace:
             self.store.prune_empty()
             session = self.store.new()
             self.select_session(session)
+            self._start_with_default_template()
             self._rebuild_session_list()
         if session.is_empty:
             session.created = datetime.datetime.now().replace(microsecond=0).isoformat()

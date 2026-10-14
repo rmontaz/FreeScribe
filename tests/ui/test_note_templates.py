@@ -89,3 +89,23 @@ def test_no_note_generation_is_built_in_and_listed_last(styles_file):
     assert builtins[0] == NoteStyleSelector.DEFAULT_STYLE
     assert builtins[-1] == NoteStyleSelector.NO_NOTE_STYLE
     assert NoteStyleSelector.is_protected(NoteStyleSelector.NO_NOTE_STYLE)
+
+
+def test_default_template_is_saved_and_used_at_start(styles_file):
+    NoteStyleSelector.ensure_loaded()
+    assert NoteStyleSelector.set_default("Progress Note")
+    NoteStyleSelector.select_style("Referral Letter")
+    NoteStyleSelector._styles_loaded = False
+    NoteStyleSelector.ensure_loaded()                       # next launch
+    assert NoteStyleSelector.default_style == "Progress Note"
+    assert NoteStyleSelector.current_style == "Progress Note"
+    assert not NoteStyleSelector.set_default("No such template")
+
+
+def test_older_files_keep_the_last_template_as_default(styles_file):
+    import json
+    with open(styles_file, "w") as f:
+        json.dump({"styles": {}, "current_style": "History & Physical"}, f)
+    NoteStyleSelector._styles_loaded = False
+    NoteStyleSelector.ensure_loaded()
+    assert NoteStyleSelector.default_style == NoteStyleSelector.current_style == "History & Physical"

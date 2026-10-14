@@ -63,6 +63,8 @@ class NoteStyleSelector(tk.Frame):
     ADD_OPTION = "Add Prompt Template..."
     NO_NOTE_STYLE = "No Note Generation"
     current_style = DEFAULT_STYLE
+    # The template every new session starts with (the note written when transcription stops)
+    default_style = DEFAULT_STYLE
     # Store style data with pre/post prompts
     style_data = {}
     style_options = [ADD_OPTION, DEFAULT_STYLE]
@@ -185,6 +187,30 @@ class NoteStyleSelector(tk.Frame):
         return True
 
     @classmethod
+    def set_default(cls, style_name):
+        """
+        Makes ``style_name`` the template new sessions start with, so it is the
+        note written automatically when transcription stops.
+
+        Returns:
+            bool: True if the template exists.
+        """
+        cls.ensure_loaded()
+        if style_name not in cls.style_data:
+            return False
+        cls.default_style = style_name
+        cls.save_styles()
+        return True
+
+    @classmethod
+    def use_default(cls):
+        """Switches back to the default template (for a new session)."""
+        cls.ensure_loaded()
+        if cls.current_style != cls.default_style and cls.default_style in cls.style_data:
+            cls.current_style = cls.default_style
+            cls.save_styles()
+
+    @classmethod
     def get_prompt_info(cls, style_name):
         """
         Gets the prompt information for a named template.
@@ -230,11 +256,12 @@ class NoteStyleSelector(tk.Frame):
                 with open(cls._styles_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                     cls.style_data = data.get('styles', {})
-                    cls.current_style = data.get('current_style', cls.DEFAULT_STYLE)
+                    # Files from before the default existed: the last template used becomes the default
+                    cls.default_style = data.get('default_style', data.get('current_style', cls.DEFAULT_STYLE))
             else:
                 # Create default styles
                 cls.style_data = {}
-                cls.current_style = cls.DEFAULT_STYLE
+                cls.default_style = cls.DEFAULT_STYLE
 
             # Make sure every built-in template is available. Templates the user
             # already has under the same name are left untouched.
@@ -243,8 +270,10 @@ class NoteStyleSelector(tk.Frame):
                 if name not in cls.style_data:
                     cls.style_data[name] = dict(prompts)
                     added = True
-            if cls.current_style not in cls.style_data:
-                cls.current_style = cls.DEFAULT_STYLE
+            if cls.default_style not in cls.style_data:
+                cls.default_style = cls.DEFAULT_STYLE
+            # Every launch starts with the default template
+            cls.current_style = cls.default_style
             if added:
                 cls.save_styles()
 
@@ -254,7 +283,7 @@ class NoteStyleSelector(tk.Frame):
             logger.exception(f"Error loading styles: {e}")
             # Fallback to defaults
             cls.style_data = {name: dict(prompts) for name, prompts in cls._get_builtin_styles().items()}
-            cls.current_style = cls.DEFAULT_STYLE
+            cls.current_style = cls.default_style = cls.DEFAULT_STYLE
             cls._rebuild_options()
 
     @classmethod
@@ -271,10 +300,13 @@ class NoteStyleSelector(tk.Frame):
         Returns:
             None
         """
+        if cls.default_style not in cls.style_data:      # the default was deleted
+            cls.default_style = cls.DEFAULT_STYLE
         try:
             data = {
                 'styles': cls.style_data,
-                'current_style': cls.current_style
+                'current_style': cls.current_style,
+                'default_style': cls.default_style
             }
             with open(cls._styles_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
@@ -465,6 +497,8 @@ class NoteStyleSelector(tk.Frame):
                 
                 self.update_dropdown()
                 self.style_var.set(new_name)
+                if NoteStyleSelector.default_style == current_style:   # a renamed default stays the default
+                    NoteStyleSelector.default_style = new_name
                 NoteStyleSelector.current_style = new_name
                 NoteStyleSelector.save_styles()
             elif new_name == current_style:
@@ -501,9 +535,11 @@ class NoteStyleSelector(tk.Frame):
             if current_style in NoteStyleSelector.style_data:
                 del NoteStyleSelector.style_data[current_style]
             self.update_dropdown()
-            # Set to default after deletion
-            self.style_var.set("SOAP Note - Default")
-            NoteStyleSelector.current_style = "SOAP Note - Default"
+            # Back to the default template (SOAP if the deleted one was the default)
+            if NoteStyleSelector.default_style == current_style:
+                NoteStyleSelector.default_style = NoteStyleSelector.DEFAULT_STYLE
+            NoteStyleSelector.current_style = NoteStyleSelector.default_style
+            self.style_var.set(NoteStyleSelector.current_style)
             NoteStyleSelector.save_styles()
 
     def update_dropdown(self):

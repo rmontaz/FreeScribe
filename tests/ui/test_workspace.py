@@ -439,17 +439,17 @@ def test_long_history_is_listed_a_page_at_a_time(root, workspace):
 
 
 # ------------------------------------------------------------------ PDF forms
-def test_document_menu_offers_form_filling(root, workspace):
+def test_fill_pdf_form_has_its_own_sidebar_button(root, workspace):
     from UI.Widgets import Controls
-    type_into(root, workspace.context, "Works in a warehouse.")      # no transcript yet
-    assert workspace.add_doc_button.enabled
-    workspace._open_document_menu()
-    items = Controls.popup_menu.last_items
-    labels = [item["label"] for item in items if item]
-    assert labels[-1] == "Fill a PDF form…"
-    assert all(item.get("enabled") is False for item in items[1:-2])  # documents need a transcript
-    items[-1]["command"]()
+    assert not workspace.fill_form_button.enabled                  # nothing in the session yet
+    type_into(root, workspace.context, "Works in a warehouse.")      # no transcript needed
+    assert workspace.fill_form_button.enabled
+    workspace.fill_form_button.invoke()
     assert ("fill_form", ()) in workspace.calls
+    type_into(root, workspace.transcript, "Doctor: hello.")
+    workspace._open_document_menu()                                  # the + menu is for documents only
+    labels = [item["label"] for item in Controls.popup_menu.last_items if item]
+    assert "Fill a PDF form…" not in labels
 
 
 def test_help_menu_lists_third_party_licences(workspace):
@@ -492,3 +492,33 @@ def test_no_note_template_keeps_the_template_menu(root, workspace):
     workspace._choose_template(NoteStyleSelector.DEFAULT_STYLE)
     pump(root)
     assert workspace.notes_enabled() and workspace.generate_button.winfo_manager() == "pack"
+
+
+# ------------------------------------------------------------ default template
+def test_new_sessions_start_with_the_default_template(root, workspace):
+    from UI.NoteStyleSelector import NoteStyleSelector
+    from UI.Widgets import Controls
+    type_into(root, workspace.transcript, "Doctor: hello.")
+    workspace._choose_template("History & Physical")
+    workspace._open_template_menu()
+    items = [i for i in Controls.popup_menu.last_items if i]
+    make_default = next(i for i in items if i["label"].startswith("Make "))
+    assert make_default["label"] == "Make \u201cHistory & Physical\u201d the default" and make_default["enabled"]
+    assert any(i["label"] == "SOAP Note   (default)" for i in items)
+
+    # A one-off choice: the next session goes back to the default (SOAP)
+    workspace.new_session()
+    assert NoteStyleSelector.current_style == NoteStyleSelector.DEFAULT_STYLE
+
+    # Make H&P the default: new sessions, and recordings that start a new session, use it
+    workspace._choose_template("History & Physical")
+    workspace._open_template_menu()
+    next(i for i in Controls.popup_menu.last_items if i and i["label"].startswith("Make "))["command"]()
+    assert NoteStyleSelector.default_style == "History & Physical"
+    workspace._choose_template(NoteStyleSelector.DEFAULT_STYLE)
+    type_into(root, workspace.transcript, "Doctor: second visit.")
+    workspace.begin_capture()                       # current session has a transcript -> new session
+    assert NoteStyleSelector.current_style == "History & Physical"
+    workspace._open_template_menu()
+    labels = [i["label"] for i in Controls.popup_menu.last_items if i]
+    assert "History & Physical   (default)" in labels
