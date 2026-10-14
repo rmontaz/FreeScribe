@@ -152,6 +152,21 @@ class LoadingWindow:
                 UI.Helpers.enable_parent_window(self.parent, self.popup)
             raise
 
+    def set_text(self, text):
+        """Change the message shown in the window. Safe to call from any thread."""
+        self.initial_text = text
+
+        def apply():
+            label = getattr(self, "label", None)
+            if label is not None and label.winfo_exists():
+                label.configure(text=text)
+
+        if self.parent:
+            try:
+                self.parent.after(0, apply)
+            except RuntimeError:
+                pass  # main loop no longer running
+
     def _handle_cancel(self):
         """
         Internal method to handle cancel button press.

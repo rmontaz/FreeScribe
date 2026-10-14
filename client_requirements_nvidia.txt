@@ -39,6 +39,8 @@ pydantic_core==2.33.1
 pyinstaller==6.10.0
 pyinstaller-hooks-contrib==2024.8
 pyperclip==1.9.0
+pypdf==6.20.1
+pymupdf==1.28.2
 python-dateutil==2.9.0.post0
 python-stdnum==1.20
 pytz==2024.2

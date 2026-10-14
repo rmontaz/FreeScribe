@@ -76,6 +76,8 @@ from urllib.parse import urlparse
 from UI.Theme import Theme
 from UI.Workspace import Workspace
 from services.sessions import SessionStore, DETAIL_LEVELS, DEFAULT_DETAIL_LEVEL, compose_source, compose_revision_prompt
+from services import form_filler
+from UI.FormFillWindow import FormFillWindow
 from utils.ui_state import UIState
 
 # parse command line arguments
@@ -1904,6 +1906,129 @@ def generate_document(template_name):
     run_llm_task(prompt, f"Creating {title}", f"Creating {title}. Please wait.", on_success)
 
 
+def form_source_budget():
+    """How many characters of visit information fit in one form-filling prompt."""
+    if app_settings.editable_settings[SettingsKeys.LOCAL_LLM.value]:
+        try:
+            window_tokens = int(app_settings.editable_settings[SettingsKeys.LOCAL_LLM_CONTEXT_WINDOW.value])
+        except (TypeError, ValueError):
+            window_tokens = 4096
+        # Leave room for the instructions, the field list and the answers (~1,300 tokens)
+        return max(2000, int((window_tokens - 1300) * 3.5))
+    return 40000
+
+
+def fill_form():
+    """Fills a PDF form the user picks with information from the current session."""
+    workspace.flush_edits()
+    session = workspace.current
+    if session is None or not (session.transcript.strip() or session.note.strip() or session.context.strip()):
+        workspace.toast("There is nothing in this session to fill a form from yet", icon_name="info")
+        return
+
+    pdf_path = filedialog.askopenfilename(title="Choose a PDF form to fill",
+                                          filetypes=(("PDF forms", "*.pdf"),))
+    if not pdf_path:
+        return
+    try:
+        prepared = form_filler.prepare_form(pdf_path)
+    except form_filler.FormError as error:
+        messagebox.showinfo("Fill PDF form", str(error))
+        return
+    fields = prepared.fields
+
+    source = form_filler.compose_source(
+        title=session.title, note=session.note, context=session.context, transcript=session.transcript,
+        visit_date=session.created_at.date(), max_chars=form_source_budget())
+    # Identifiers become placeholders the model copies; the real values are put back afterwards
+    hidden_source, mapping = form_filler.pseudonymize(source)
+    asked = [f for f in fields if f.needs_answer]
+    form_title = os.path.splitext(os.path.basename(pdf_path))[0]
+    session_title = session.title
+
+    def start(text):
+        start_flashing("Filling form")
+        threading.Thread(target=_fill_form_thread,
+                         args=(prepared, asked, text, mapping, form_title, session_title),
+                         daemon=True).start()
+
+    workspace.hide_warning(kind="error")
+    if not asked:
+        _show_form_review(prepared, {}, session_title)
+    elif needs_phi_review():
+        ScrubWindow(root, hidden_source, start, stop_flashing)
+    else:
+        start(hidden_source)
+
+
+def _fill_form_thread(prepared, asked, source, mapping, form_title, session_title):
+    batches = form_filler.build_prompts(asked, source, form_title)
+    cancel_event = threading.Event()
+    state = {"cancelled": False, "worker": None}
+    values, problems = {}, []
+
+    def cancel():
+        state["cancelled"] = True
+        cancel_event.set()
+        worker = state["worker"]
+        try:
+            if worker is not None and worker.is_alive():
+                kill_thread(worker.ident)
+        except Exception as e:
+            logger.exception(f"An error occurred: {e}")
+        finally:
+            stop_flashing()
+            run_on_ui(lambda: workspace.toast("Cancelled", icon_name="info"))
+
+    loading_window = LoadingWindow(root, "Filling form", "Reading the form…", on_cancel=cancel,
+                                   note_text=f"{len(asked)} fields to fill. Nothing is saved until you review it.")
+
+    def work():
+        done = 0
+        for group, prompt in batches:
+            if cancel_event.is_set():
+                return
+            loading_window.set_text(f"Filling fields {done + 1}–{done + len(group)} of {len(asked)}…")
+            try:
+                reply = send_text_to_chatgpt(prompt, cancel_event)
+            except Exception as e:
+                logger.exception(f"Form filling request failed: {e}")
+                problems.append(str(e))
+                reply = ""
+            if reply and is_llm_error(reply):
+                problems.append(describe_llm_error(reply))
+                reply = ""
+            answers = form_filler.parse_answers(reply or "", len(group))
+            if reply and not answers:
+                logger.warning(f"Could not read form answers from the model reply: {reply[:300]!r}")
+            for number, field in enumerate(group, 1):
+                value = form_filler.restore(answers.get(number, ""), mapping)
+                values[field.name] = form_filler.normalize(field, value)
+            done += len(group)
+
+    worker = threading.Thread(target=work)
+    state["worker"] = worker
+    worker.start()
+    worker.join()
+
+    loading_window.destroy()
+    stop_flashing()
+    if state["cancelled"]:
+        return
+    if problems and not any(values.values()):
+        report_error(f"The form could not be filled. {problems[0]}")
+        return
+    run_on_ui(_show_form_review, prepared, values, session_title)
+
+
+def _show_form_review(prepared, values, session_title):
+    def on_saved(path):
+        workspace.toast(f"Saved {os.path.basename(path)}")
+
+    FormFillWindow(root, prepared.original_path, prepared.fields, values, session_title=session_title,
+                   on_saved=on_saved, fill_path=prepared.fill_path, converted=prepared.converted)
+
+
 def upload_file():
     global uploaded_file_path
     file_path = filedialog.askopenfilename(filetypes=(("Audio files", "*.wav *.mp3 *.m4a"),))
@@ -2161,10 +2286,12 @@ workspace = Workspace(
         "upload": upload_file,
         "ask": ask_assistant,
         "generate_document": generate_document,
+        "fill_form": fill_form,
         "toggle_view": toggle_view,
         "open_settings": window.open_settings,
         "help_guide": window.open_help_guide,
         "about": window.open_about,
+        "third_party_notices": window.open_third_party_notices,
         "debug_window": window.open_debug_window,
         "manage_recordings": window.open_recordings_manager,
         "manage_logs": window.open_log_window,

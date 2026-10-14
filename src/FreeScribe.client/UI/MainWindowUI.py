@@ -265,6 +265,10 @@ class MainWindowUI:
         """Show the About page."""
         self._show_md_content(get_file_path('markdown', 'help', 'about.md'), 'About')
 
+    def open_third_party_notices(self):
+        """Show the licences of the third-party libraries FreeScribe uses."""
+        self._show_md_content(get_file_path('markdown', 'help', 'third_party_notices.md'), 'Third-party licences')
+
     def open_debug_window(self):
         """Open the debug output window."""
         DebugPrintWindow(self)

@@ -379,7 +379,7 @@ class Workspace:
 
         self.add_doc_button = Button(self.tabs.trailing, icon_name="plus", variant="ghost", size="sm", surface=bg,
                                      command=self._open_document_menu,
-                                     tooltip="Create another document from this session")
+                                     tooltip="Create a document or fill a PDF form from this session")
         self.add_doc_button.pack(side="left", pady=Theme.px(3))
 
         actions = self.tabs.actions
@@ -1025,6 +1025,7 @@ class Workspace:
         popup_menu(self.help_button, [
             {"label": "Help guide", "command": lambda: self._act("help_guide")},
             {"label": "About FreeScribe", "command": lambda: self._act("about")},
+            {"label": "Third-party licences", "command": lambda: self._act("third_party_notices")},
             None,
             {"label": "Debug window", "command": lambda: self._act("debug_window")},
         ])
@@ -1071,7 +1072,8 @@ class Workspace:
         idle = not self.locked and not self.is_recording
         self._fit_toolbar()
         self.generate_button.set_enabled(idle and has_transcript)
-        self.add_doc_button.set_enabled(idle and has_transcript)
+        has_content = has_transcript or bool(session.note.strip() or session.context.strip())
+        self.add_doc_button.set_enabled(idle and has_content)
         self.template_button.set_enabled(idle)
         has_text = bool(self.current_page().get_text().strip())
         self.copy_button.set_enabled(has_text)
@@ -1163,10 +1165,13 @@ class Workspace:
     def _open_document_menu(self):
         if self.locked or self.current is None:
             return
+        has_transcript = bool(self.current.transcript.strip())
         items = [{"label": "Create a document from this session", "header": True}]
         for name in NoteStyleSelector.template_names():
-            items.append({"label": name.replace(" - Default", ""),
+            items.append({"label": name.replace(" - Default", ""), "enabled": has_transcript,
                           "command": lambda n=name: self._act("generate_document", n)})
+        items.append(None)
+        items.append({"label": "Fill a PDF form…", "command": lambda: self._act("fill_form")})
         popup_menu(self.add_doc_button, items)
 
     def _rebuild_document_tabs(self):

@@ -62,3 +62,4 @@ Tests run with `pytest` from the repository root. The interface tests in `tests/
 
 FreeScribes code is under the AGPL-3.0 License. See (LICENSE)[https://github.com/ClinicianFOCUS/FreeScribe/blob/main/LICENSE.txt] for further information.
 
+Third-party libraries keep their own licences. The notices for the libraries used by PDF form filling (pypdf and PyMuPDF) are in [src/FreeScribe.client/markdown/help/third_party_notices.md](src/FreeScribe.client/markdown/help/third_party_notices.md), which is also shown in the app under **Help ▸ Third-party licences**.

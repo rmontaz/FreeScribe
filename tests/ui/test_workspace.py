@@ -76,7 +76,7 @@ def workspace(root, tmp_path, monkeypatch):
 
     calls = []
     names = ("toggle_recording", "resume_recording", "toggle_pause", "generate", "upload", "ask",
-             "generate_document", "toggle_view", "open_settings",
+             "generate_document", "fill_form", "third_party_notices", "toggle_view", "open_settings",
              "sessions_changed",
              "sessions_cleared")
     actions = {name: (lambda *args, name=name: calls.append((name, args))) for name in names}
@@ -436,6 +436,28 @@ def test_long_history_is_listed_a_page_at_a_time(root, workspace):
     workspace._on_search("Patient 17")           # searching looks through everything, not just the visible page
     pump(root, 0.4)
     assert "Patient 17" in [row.session.title for row in workspace._rows.values()]
+
+
+# ------------------------------------------------------------------ PDF forms
+def test_document_menu_offers_form_filling(root, workspace):
+    from UI.Widgets import Controls
+    type_into(root, workspace.context, "Works in a warehouse.")      # no transcript yet
+    assert workspace.add_doc_button.enabled
+    workspace._open_document_menu()
+    items = Controls.popup_menu.last_items
+    labels = [item["label"] for item in items if item]
+    assert labels[-1] == "Fill a PDF form…"
+    assert all(item.get("enabled") is False for item in items[1:-2])  # documents need a transcript
+    items[-1]["command"]()
+    assert ("fill_form", ()) in workspace.calls
+
+
+def test_help_menu_lists_third_party_licences(workspace):
+    from UI.Widgets import Controls
+    workspace._open_help_menu()
+    item = next(i for i in Controls.popup_menu.last_items if i and i["label"] == "Third-party licences")
+    item["command"]()
+    assert ("third_party_notices", ()) in workspace.calls
 
 
 # ------------------------------------------------------------ transcribe only
