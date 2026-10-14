@@ -9,13 +9,13 @@
 
 | Computer | Installer |
 |---|---|
-| Mac with Apple chip (M1–M4) | [FreeScribeInstaller_arm64.pkg](https://github.com/rmontaz/FreeScribe/releases/download/v1.2.1-RC2-workspace/FreeScribeInstaller_arm64.pkg) |
-| Mac with Intel chip | [FreeScribeInstaller_x86_64.pkg](https://github.com/rmontaz/FreeScribe/releases/download/v1.2.1-RC2-workspace/FreeScribeInstaller_x86_64.pkg) |
+| Mac with Apple chip (M1–M4) | [FreeScribeInstaller_arm64.pkg](https://github.com/rmontaz/FreeScribe/releases/download/v1.2.1-RC3-workspace/FreeScribeInstaller_arm64.pkg) |
+| Mac with Intel chip | [FreeScribeInstaller_x86_64.pkg](https://github.com/rmontaz/FreeScribe/releases/download/v1.2.1-RC3-workspace/FreeScribeInstaller_x86_64.pkg) |
 | Windows (CPU, any PC) | coming soon |
 | Windows (NVIDIA graphics card) | coming soon |
-| Linux (x86_64) | [FreeScribe_linux_x86_64.tar.gz](https://github.com/rmontaz/FreeScribe/releases/download/v1.2.1-RC2-workspace/FreeScribe_linux_x86_64.tar.gz): unpack, then run `./run-freescribe.sh` |
+| Linux (x86_64) | [FreeScribe_linux_x86_64.tar.gz](https://github.com/rmontaz/FreeScribe/releases/download/v1.2.1-RC3-workspace/FreeScribe_linux_x86_64.tar.gz): unpack, then run `./run-freescribe.sh` |
 
-All files are on the [release page](https://github.com/rmontaz/FreeScribe/releases/tag/v1.2.1-RC2-workspace). The installers are not code-signed, so the first time you open one:
+All files are on the [release page](https://github.com/rmontaz/FreeScribe/releases/tag/v1.2.1-RC3-workspace). The installers are not code-signed, so the first time you open one:
 
 - **Mac:** if macOS blocks it, open **System Settings → Privacy & Security** and click **Open Anyway**.
 
