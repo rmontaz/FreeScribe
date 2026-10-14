@@ -78,6 +78,8 @@ from UI.Workspace import Workspace
 from services.sessions import SessionStore, DETAIL_LEVELS, DEFAULT_DETAIL_LEVEL, compose_source, compose_revision_prompt
 from services import form_filler
 from UI.FormFillWindow import FormFillWindow
+from UI.ChatWindow import ChatWindow
+from services.chat import compose_chat_prompt, form_event_text
 from utils.ui_state import UIState
 
 # parse command line arguments
@@ -1433,7 +1435,16 @@ def send_text_to_api(edited_text, cancel_event):
 
     return generated_response
          
-def send_text_to_localmodel(edited_text):  
+# The built-in model handles one request at a time (the chat can be used while a note is written)
+local_model_lock = threading.Lock()
+
+
+def send_text_to_localmodel(edited_text):
+    with local_model_lock:
+        return _send_text_to_localmodel(edited_text)
+
+
+def _send_text_to_localmodel(edited_text):
     # Send prompt to local model and get response
     if ModelManager.local_model is None:
         ModelManager.setup_model(app_settings=app_settings, root=root)
@@ -1945,23 +1956,24 @@ def fill_form():
     asked = [f for f in fields if f.needs_answer]
     form_title = os.path.splitext(os.path.basename(pdf_path))[0]
     session_title = session.title
+    session_id = session.id
 
     def start(text):
         start_flashing("Filling form")
         threading.Thread(target=_fill_form_thread,
-                         args=(prepared, asked, text, mapping, form_title, session_title),
+                         args=(prepared, asked, text, mapping, form_title, session_title, session_id),
                          daemon=True).start()
 
     workspace.hide_warning(kind="error")
     if not asked:
-        _show_form_review(prepared, {}, session_title)
+        _show_form_review(prepared, {}, session_title, session_id)
     elif needs_phi_review():
         ScrubWindow(root, hidden_source, start, stop_flashing)
     else:
         start(hidden_source)
 
 
-def _fill_form_thread(prepared, asked, source, mapping, form_title, session_title):
+def _fill_form_thread(prepared, asked, source, mapping, form_title, session_title, session_id=None):
     batches = form_filler.build_prompts(asked, source, form_title)
     cancel_event = threading.Event()
     state = {"cancelled": False, "worker": None}
@@ -2018,15 +2030,126 @@ def _fill_form_thread(prepared, asked, source, mapping, form_title, session_titl
     if problems and not any(values.values()):
         report_error(f"The form could not be filled. {problems[0]}")
         return
-    run_on_ui(_show_form_review, prepared, values, session_title)
+    run_on_ui(_show_form_review, prepared, values, session_title, session_id)
 
 
-def _show_form_review(prepared, values, session_title):
+def _show_form_review(prepared, values, session_title, session_id=None):
+    review = {}
+
     def on_saved(path):
         workspace.toast(f"Saved {os.path.basename(path)}")
+        session = session_store.get(session_id) if session_id else None
+        window = review.get("window")
+        if session is None or window is None:
+            return
+        # The chat knows which forms were filled and with what
+        entered = []
+        saved = window.saved_values
+        for field, value in ((f, saved.get(f.name, "")) for f in window.fields):
+            if field.kind == form_filler.CHECKBOX:
+                value = "ticked" if value == "yes" else ""
+            elif field.kind in (form_filler.RADIO, form_filler.CHOICE):
+                value = field.option_label(value) if value else ""
+            entered.append((field.label, value))
+        session.add_chat("event", form_event_text(os.path.basename(prepared.original_path),
+                                                  os.path.basename(path), entered))
+        refresh_chat_window(session.id)
+        if storing_notes_locally():
+            save_notes_history()
 
-    FormFillWindow(root, prepared.original_path, prepared.fields, values, session_title=session_title,
-                   on_saved=on_saved, fill_path=prepared.fill_path, converted=prepared.converted)
+    review["window"] = FormFillWindow(root, prepared.original_path, prepared.fields, values,
+                                      session_title=session_title, on_saved=on_saved,
+                                      fill_path=prepared.fill_path, converted=prepared.converted)
+
+
+# ------------------------------------------------------------------- chat
+chat_windows = {}       # session id -> open ChatWindow
+
+
+def refresh_chat_window(session_id):
+    window = chat_windows.get(session_id)
+    if window is not None and window.exists():
+        window.refresh()
+
+
+def open_chat():
+    """Opens the chat for the current session (or brings it to the front)."""
+    workspace.flush_edits()
+    session = workspace.current
+    if session is None:
+        return
+    window = chat_windows.get(session.id)
+    if window is not None and window.exists():
+        window.lift()
+        return
+
+    def on_clear():
+        if messagebox.askyesno("Clear chat", "Delete this session's chat? This cannot be undone.",
+                               parent=chat_windows[session.id].window):
+            session.chat = []
+            session.touch()
+            if storing_notes_locally():
+                save_notes_history()
+
+    chat_windows[session.id] = ChatWindow(root, session, on_send=lambda text: send_chat_message(session, text),
+                                          on_clear=on_clear, on_close=lambda: chat_windows.pop(session.id, None))
+
+
+def send_chat_message(session, text):
+    """Sends a chat message with the session as context and shows the reply."""
+    window = chat_windows.get(session.id)
+    workspace.flush_edits()
+    history = list(session.chat)
+    session.add_chat("user", text)
+    if window is not None:
+        window.refresh()
+    if storing_notes_locally():
+        save_notes_history()
+
+    prompt, report = compose_chat_prompt(session, history, text, budget=form_source_budget())
+    if any(report.values()):
+        logger.info(f"Chat prompt shortened to fit: {report}")
+    # Identifiers become placeholders the model copies; the real values are put back in its reply
+    hidden, mapping = form_filler.pseudonymize(prompt)
+
+    def start(prompt_text):
+        if window is not None:
+            window.set_busy(True)
+        threading.Thread(target=_chat_thread, args=(session, prompt_text, mapping), daemon=True).start()
+
+    def cancelled():
+        if window is not None:
+            window.set_busy(False, "Not sent.")
+
+    if needs_phi_review():
+        ScrubWindow(root, hidden, start, cancelled)
+    else:
+        start(hidden)
+
+
+def _chat_thread(session, prompt_text, mapping):
+    try:
+        reply = send_text_to_chatgpt(prompt_text)
+        error = describe_llm_error(reply) if is_llm_error(reply) else None
+    except Exception as e:
+        logger.exception(f"Chat request failed: {e}")
+        reply, error = "", str(e)
+
+    def finish():
+        window = chat_windows.get(session.id)
+        if error:
+            if window is not None and window.exists():
+                window.show_error(f"No reply: {error}")
+            else:
+                report_error(f"The chat reply could not be created. {error}")
+            return
+        session.add_chat("assistant", form_filler.restore(reply.strip(), mapping))
+        if window is not None and window.exists():
+            window.set_busy(False)
+        if storing_notes_locally():
+            save_notes_history()
+
+    run_on_ui(finish)
 
 
 # The bundled OSCAR eForm Mapper, served on this computer only while FreeScribe runs
@@ -2327,6 +2450,7 @@ workspace = Workspace(
         "ask": ask_assistant,
         "generate_document": generate_document,
         "fill_form": fill_form,
+        "open_chat": open_chat,
         "open_eform_mapper": open_eform_mapper,
         "toggle_view": toggle_view,
         "open_settings": window.open_settings,

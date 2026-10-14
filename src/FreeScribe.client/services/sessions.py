@@ -99,6 +99,9 @@ class Session:
     template: str = ""
     duration: float = 0.0
     documents: List[Document] = field(default_factory=list)
+    # Chat with the AI about this encounter: {"role": "user" | "assistant" | "event", "text", "time"}.
+    # "event" entries record things done in the session (a form filled) for the chat to know about.
+    chat: List[dict] = field(default_factory=list)
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     created: str = field(default_factory=lambda: _now().isoformat())
     updated: str = field(default_factory=lambda: _now().isoformat())
@@ -116,7 +119,7 @@ class Session:
     def is_empty(self) -> bool:
         """True when nothing worth keeping has been entered yet."""
         return not (self.title.strip() or self.transcript.strip() or self.context.strip()
-                    or self.note.strip() or self.documents)
+                    or self.note.strip() or self.documents or self.chat)
 
     @property
     def has_output(self) -> bool:
@@ -180,7 +183,15 @@ class Session:
             "template": self.template,
             "duration": round(float(self.duration or 0), 1),
             "documents": [document.to_dict() for document in self.documents],
+            "chat": [dict(message) for message in self.chat],
         }
+
+    def add_chat(self, role: str, text: str) -> dict:
+        """Append a chat entry and return it."""
+        message = {"role": role, "text": text, "time": _now().isoformat()}
+        self.chat.append(message)
+        self.touch()
+        return message
 
     @classmethod
     def from_dict(cls, data: dict) -> "Session":
@@ -199,6 +210,10 @@ class Session:
         for raw in data.get("documents") or []:
             if isinstance(raw, dict):
                 documents.append(Document.from_dict(raw))
+        chat = []
+        for raw in data.get("chat") or []:
+            if isinstance(raw, dict) and raw.get("role") in ("user", "assistant", "event") and raw.get("text"):
+                chat.append({"role": raw["role"], "text": str(raw["text"]), "time": str(raw.get("time") or "")})
         try:
             duration = float(data.get("duration") or 0)
         except (TypeError, ValueError):
@@ -212,6 +227,7 @@ class Session:
             template=str(data.get("template") or ""),
             duration=duration,
             documents=documents,
+            chat=chat,
             id=str(data.get("id") or uuid.uuid4().hex[:12]),
             created=created_text,
             updated=str(data.get("updated") or created_text),

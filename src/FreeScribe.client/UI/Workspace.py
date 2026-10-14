@@ -280,6 +280,12 @@ class Workspace:
 
         nav = tk.Frame(footer, bg=bg)
         nav.pack(fill="x", padx=Theme.px(8), pady=(Theme.px(8), Theme.px(2)))
+        if "open_chat" in self.actions:
+            self.chat_button = Button(nav, text="Chat", icon_name="sparkle", variant="ghost-strong", size="sm",
+                                      stretch=True, align="left", surface=bg,
+                                      tooltip="Chat with the AI about the open session",
+                                      command=lambda: self._act("open_chat"))
+            self.chat_button.pack(fill="x")
         if "fill_form" in self.actions:
             self.fill_form_button = Button(nav, text="Fill PDF form", icon_name="edit", variant="ghost-strong",
                                            size="sm", stretch=True, align="left", surface=bg,

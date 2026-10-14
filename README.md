@@ -25,6 +25,7 @@ All files are on the [release page](https://github.com/rmontaz/FreeScribe/releas
 - **Note templates and a default.** SOAP, History & Physical, Progress Note, Referral Letter, a plain-language Patient Summary and No Note Generation are built in, with Brief / Standard / Detailed levels of detail. **Template → Make "…" the default** sets the note written automatically when transcription stops.
 - **Documents and edits.** The **+** next to the tabs creates extra documents (such as a referral letter) from the same session. The bar at the bottom revises the note in plain words ("make the plan more concise"). Copy any tab or export it to Word, PDF or text.
 - **Fill PDF form** (sidebar). Fills a PDF form from the session's note, transcript and context, then shows every field for review before saving a new copy. It works with fillable PDFs and with flat ones (printed or typed forms), where it finds the lines, boxes, table cells and tick boxes itself. Identifiers are replaced with placeholders before anything is sent to the AI and put back afterwards.
+- **Chat** (sidebar). Chat with the AI about the open session. Every message is sent with the session's context, transcript, note, documents and the forms filled in it (each saved form is recorded in the chat with the values entered), and the conversation is kept with the session. Identifiers are replaced with placeholders the same way as for forms.
 - **eForm mapper** (sidebar). Opens the OSCAR eForm Mapper in your browser. Its **Find fields from PDF** button places every field and checkbox exactly where the source PDF draws them, names them from their labels, and adds the obvious OSCAR tags (patient name, date of birth, health card number, today's date, physician, clinic). It runs only on your computer.
 - **Transcribe Only Mode** and the **No Note Generation** template record and transcribe without writing a note.
 - **Compact recorder.** A small always-on-top bar with record, pause, timer and level.
@@ -51,7 +52,7 @@ Please note this application is still in alpha state. Feel free to contribute, c
 - **Start transcribing** - one button (Alt+R) records and transcribes the visit and then writes the note. Pause with Alt+P, upload an audio file instead, or resume an earlier session.
 - **Context, Transcript, Note** - add anything that was not said aloud under Context, check the transcript, and edit the note directly.
 - **Templates and documents** - SOAP, History & Physical, Progress Note, Referral Letter and a plain-language Patient Summary are built in, and you can add your own and choose which one is the default. The "+" next to the tabs creates further documents from the same session.
-- **Fill PDF form and eForm mapper** - both are in the sidebar (see [What's new in this fork](#whats-new-in-this-fork)).
+- **Chat, Fill PDF form and eForm mapper** - all are in the sidebar (see [What's new in this fork](#whats-new-in-this-fork)).
 - **Ask for edits** - describe a change in the bar at the bottom ("make the plan more concise") and undo it if needed.
 - **Copy and export** - copy any tab, or save it as a Word, PDF or text file.
 - **Compact recorder** - a small always-on-top bar with record, pause, timer and microphone level.

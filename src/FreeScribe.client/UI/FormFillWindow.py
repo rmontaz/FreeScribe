@@ -50,6 +50,7 @@ class FormFillWindow:
         self.values = dict(values)
         self.session_title = session_title
         self.on_saved = on_saved
+        self.saved_values = {}
         self.rows = []
 
         self.window = tk.Toplevel(parent)
@@ -172,12 +173,14 @@ class FormFillWindow:
             messagebox.showwarning("Fill PDF form", "Choose a new name so the blank form is kept.",
                                    parent=self.window)
             return
+        values = self.collect()
         try:
-            ff.fill_pdf(self.fill_path, target, self.fields, self.collect())
+            ff.fill_pdf(self.fill_path, target, self.fields, values)
         except Exception as error:
             logger.exception(f"Saving filled form failed: {error}")
             messagebox.showerror("Fill PDF form", f"The form could not be saved.\n\n{error}", parent=self.window)
             return
+        self.saved_values = values      # what was written, readable after the window closes
         if self.open_after.get():
             open_file(target)
         self.close()

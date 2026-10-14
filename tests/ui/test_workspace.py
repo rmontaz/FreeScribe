@@ -76,7 +76,7 @@ def workspace(root, tmp_path, monkeypatch):
 
     calls = []
     names = ("toggle_recording", "resume_recording", "toggle_pause", "generate", "upload", "ask",
-             "generate_document", "fill_form", "third_party_notices", "toggle_view", "open_settings",
+             "generate_document", "fill_form", "open_chat", "third_party_notices", "toggle_view", "open_settings",
              "sessions_changed",
              "sessions_cleared")
     actions = {name: (lambda *args, name=name: calls.append((name, args))) for name in names}
@@ -450,6 +450,11 @@ def test_fill_pdf_form_has_its_own_sidebar_button(root, workspace):
     workspace._open_document_menu()                                  # the + menu is for documents only
     labels = [item["label"] for item in Controls.popup_menu.last_items if item]
     assert "Fill a PDF form…" not in labels
+
+
+def test_chat_has_its_own_sidebar_button(workspace):
+    workspace.chat_button.invoke()
+    assert ("open_chat", ()) in workspace.calls
 
 
 def test_help_menu_lists_third_party_licences(workspace):

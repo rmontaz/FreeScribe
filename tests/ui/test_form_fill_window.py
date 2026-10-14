@@ -88,6 +88,9 @@ def test_edits_are_saved_to_a_new_pdf(root, window, tmp_path, monkeypatch):
     assert result["comments"]["/V"] == "Rest for one week."
     assert result["restrictions"]["/V"] == "Light duties"
     assert window.saved == [str(target)] and window.opened == [str(target)]
+    # What was written stays readable after the window closes (the chat records it)
+    assert window.saved_values["comments"] == "Rest for one week."
+    assert window.saved_values["Text2"] == "1970-01-02"
 
 
 def test_refuses_to_overwrite_the_blank_form(window, monkeypatch):
