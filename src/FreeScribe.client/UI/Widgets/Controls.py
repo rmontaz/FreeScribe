@@ -569,11 +569,13 @@ class TextArea(tk.Frame):
     READING_WIDTH = 760
 
     def __init__(self, parent, placeholder="", on_change=None, highlight_headings=False,
-                 padx=28, pady=18, bg=Palette.BG, font=None, height=8, reading=False, on_section_copy=None):
+                 padx=28, pady=18, bg=Palette.BG, font=None, height=8, reading=False, on_section_copy=None,
+                 comfortable=False):
         """
         :param reading: note layout: section headings in the accent colour with a Copy button each,
             roomier lines, and lines no longer than :attr:`READING_WIDTH`
         :param on_section_copy: called with the heading after a section was copied
+        :param comfortable: the reading layout's type and line length, without the section buttons
         """
         super().__init__(parent, bg=bg)
         self._on_change = on_change
@@ -609,16 +611,20 @@ class TextArea(tk.Frame):
         self.text.tag_bind("flag", "<Leave>", lambda e: self.text.configure(cursor="xterm"))
         self._flags = []
         self.on_flag_ignore = None
-        if reading:
+        self._comfortable = comfortable or reading
+        if self._comfortable:
             self.text.configure(font=font or Theme.font("large"), spacing1=Theme.px(2), spacing2=Theme.px(3),
                                 spacing3=Theme.px(3))
-            self.text.tag_configure("heading", font=Theme.font("small", "semibold"),
+            self.text.tag_configure("measure", rmargin=0)
+        if reading:
+            self.text.tag_configure("heading", font=Theme.font("base", "semibold"),
                                     foreground=Palette.PRIMARY_PRESSED, spacing1=Theme.px(10), spacing3=Theme.px(4))
             self.text.tag_configure("measure", rmargin=0)
         self.text.tag_configure("status", foreground=Palette.TEXT_MUTED)
 
         self._placeholder = tk.Label(self.text, text=placeholder, bg=bg, fg=Palette.TEXT_FAINT,
-                                     font=font or Theme.font("medium"), justify="left", anchor="nw", cursor="xterm")
+                                     font=font or Theme.font("large" if self._comfortable else "medium"),
+                                     justify="left", anchor="nw", cursor="xterm")
         self._placeholder.bind("<Button-1>", lambda e: self.text.focus_set())
         self._placeholder_shown = False
         self._padx, self._pady = Theme.px(padx), Theme.px(pady)
@@ -721,6 +727,8 @@ class TextArea(tk.Frame):
         value = self.get_text()
         if self._highlight:
             self._apply_headings(value)
+        elif self._comfortable:
+            self.text.tag_add("measure", "1.0", "end")
         if value != self._last_text:
             self._last_text = value
             if self._on_change:
@@ -740,9 +748,10 @@ class TextArea(tk.Frame):
         matches = list(_HEADING_RE.finditer(value))
         for match in matches:
             self.text.tag_add("heading", f"1.0+{match.start()}c", f"1.0+{match.end()}c")
+        if self._comfortable:
+            self.text.tag_add("measure", "1.0", "end")
         if not self._reading:
             return
-        self.text.tag_add("measure", "1.0", "end")
         self._sections = []
         for number, match in enumerate(matches):
             end = matches[number + 1].start() if number + 1 < len(matches) else len(value)
@@ -864,9 +873,12 @@ class TextArea(tk.Frame):
 
     def _on_text_configure(self, event):
         self._placeholder.configure(wraplength=max(120, event.width - 2 * self._padx))
-        if self._reading:
+        if self._comfortable:
             spare = event.width - 2 * self._padx - Theme.px(self.READING_WIDTH)
             self.text.tag_configure("measure", rmargin=max(0, spare))
+            self._placeholder.configure(wraplength=max(120, min(event.width - 2 * self._padx,
+                                                                Theme.px(self.READING_WIDTH))))
+        if self._reading:
             self.after_idle(self._layout_section_buttons)
 
     def _on_scroll(self, first, last):

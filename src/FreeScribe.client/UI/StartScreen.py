@@ -50,7 +50,7 @@ class BigRecordButton(tk.Canvas):
         self.bind("<Button-1>", lambda e: self.invoke())
         self.bind("<Key-Return>", lambda e: self.invoke())
         self.bind("<Key-space>", lambda e: self.invoke())
-        Tooltip(self, "Start transcribing (Alt+R)")
+        Tooltip(self, Theme.keys("Start transcribing (Alt+R)"))
         self._render()
 
     def invoke(self):
@@ -157,7 +157,7 @@ class StartScreen(tk.Frame):
         self.title = tk.Label(column, text="Start transcribing", bg=Palette.BG, fg=Palette.TEXT,
                               font=Theme.font("title", "semibold"))
         self.title.pack(pady=(Theme.px(14), Theme.px(2)))
-        self.subtitle = tk.Label(column, text="Press Alt+R any time. The note is written when you stop.",
+        self.subtitle = tk.Label(column, text=Theme.keys("Press Alt+R any time. The note is written when you stop."),
                                  bg=Palette.BG, fg=Palette.TEXT_MUTED, font=Theme.font("base"))
         self.subtitle.pack()
 
@@ -284,10 +284,10 @@ class RecordingBanner(tk.Frame):
                                    font=Theme.font("display", "semibold"))
         self.time_label.pack(fill="x")
         self.stop_button = Button(body, text="Stop and write note", icon_name="stop", variant="danger", size="lg",
-                                  surface=bg, command=on_stop, tooltip="Stop transcribing (Alt+R)")
+                                  surface=bg, command=on_stop, tooltip=Theme.keys("Stop transcribing (Alt+R)"))
         self.stop_button.pack(side="right")
         self.pause_button = Button(body, text="Pause", icon_name="pause", variant="secondary", size="lg",
-                                   surface=bg, command=on_pause, tooltip="Pause or resume (Alt+P)")
+                                   surface=bg, command=on_pause, tooltip=Theme.keys("Pause or resume (Alt+P)"))
         self.pause_button.pack(side="right", padx=(0, Theme.px(8)))
         self.meter = LevelMeter(body, bars=22, height=40, surface=bg)
         self.meter.pack(side="left", padx=Theme.px(24))

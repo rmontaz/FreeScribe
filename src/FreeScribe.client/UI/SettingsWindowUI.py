@@ -1095,32 +1095,19 @@ pady=5, sticky="w")
         # Create the rest of the general settings
         left_row, right_row = self.create_editable_settings_col(left_frame, right_frame, left_row, right_row, self.settings.general_settings)
 
-        # Add a note at the bottom of the general settings frame
+        # A note about privacy at the bottom of the general settings
         note_text = (
-        "NOTE: To protect personal health information (PHI), we recommend using a local network.\n"
-        "The 'Show Scrub PHI' feature is only applicable for local LLMs and private networks.\n"
-        "For internet-facing endpoints, this feature will always be enabled, regardless of the 'Show Scrub PHI' setting."
-    )
-
-        # Create a frame to hold the note labels
-        note_frame = tk.Frame(self.general_settings_frame)
-        note_frame.grid(row=1, column=0, columnspan=2, padx=10, pady=5, sticky="w")
-
-        font_size = 12 if utils.system.is_windows() else 14
-        # Add the red * label
-        star_label = tk.Label(note_frame, text="*", fg="red", font=("Arial", font_size, "bold"))
-        star_label.grid(row=0, column=0, sticky="w")
-
-        font_size = 9 if utils.system.is_windows() else 12
-        # Add the rest of the text in black (bold)
-        note_label = tk.Label(
-            note_frame,
-            text=note_text,
-            font=("Arial", font_size, "bold"),  # Set font to bold
-            wraplength=400,
-            justify="left"
+            "To protect personal health information, use a local or private network for the AI. "
+            "'Show Scrub PHI' only applies to local AI models and private networks: for internet-facing "
+            "servers the review step is always shown, whatever this setting says."
         )
-        note_label.grid(row=0, column=1, sticky="w")
+        note_frame = tk.Frame(self.general_settings_frame, bg=Palette.INFO_SOFT)
+        note_frame.grid(row=1, column=0, columnspan=2, padx=10, pady=(12, 5), sticky="ew")
+        tk.Label(note_frame, image=icon("info", 16, Palette.INFO), bg=Palette.INFO_SOFT).grid(
+            row=0, column=0, sticky="n", padx=(12, 8), pady=10)
+        tk.Label(note_frame, text=note_text, bg=Palette.INFO_SOFT, fg=Palette.TEXT, font=Theme.font("small"),
+                 wraplength=Theme.px(560), justify="left").grid(row=0, column=1, sticky="w", padx=(0, 12), pady=10)
+
     def _create_checkbox(self, frame, label, setting_name, row_idx, setting_key=None):
         """
         Creates a checkbox in the given frame.
@@ -1138,7 +1125,7 @@ pady=5, sticky="w")
         current_value = bool(self.settings.editable_settings[setting_name])
         value = tk.BooleanVar(value=current_value)
         checkbox = tk.Checkbutton(frame, variable=value)
-        checkbox.grid(row=row_idx, column=1, padx=0, pady=5, sticky="w")
+        checkbox.grid(row=row_idx, column=1, padx=(12, 0), pady=5, sticky="w")
         self.settings.editable_settings_entries[setting_name] = value
         return checkbox
 

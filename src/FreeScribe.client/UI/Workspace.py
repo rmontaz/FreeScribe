@@ -148,6 +148,7 @@ class SessionRow(tk.Canvas):
         self._hover = False
         self._enabled = True
         self._title_font = Theme.font("base", "medium")
+        self._title_font_selected = Theme.font("base", "semibold")
         self._sub_font = Theme.font("small")
         self._bg_item = self.create_image(0, 0, anchor="nw")
         self._title_item = self.create_text(Theme.px(12), Theme.px(19), anchor="w", font=self._title_font)
@@ -228,7 +229,8 @@ class SessionRow(tk.Canvas):
         untitled_blank = session.is_empty
         title = "New session" if untitled_blank else session.display_title
         title_color = Palette.TEXT if self._enabled else Palette.TEXT_MUTED
-        self.itemconfigure(self._title_item, text=_ellipsize(title, self._title_font, title_width), fill=title_color)
+        font = self._title_font_selected if self.selected else self._title_font
+        self.itemconfigure(self._title_item, text=_ellipsize(title, font, title_width), fill=title_color, font=font)
         subtitle = session.subtitle()
         if session.template and session.note.strip():
             subtitle += f"  ·  {session.template.replace(' - Default', '')}"
@@ -363,7 +365,7 @@ class Workspace:
 
         self.new_button = Button(side, text="New session", icon_name="plus", variant="primary", size="lg",
                                  stretch=True, surface=bg, command=self.new_session,
-                                 tooltip="Start a new session (Ctrl+N)")
+                                 tooltip=Theme.keys("Start a new session (Ctrl+N)"))
         self.new_button.pack(fill="x", padx=Theme.px(14))
 
         search = RoundedFrame(side, fill=Palette.BG, outline=Palette.BORDER, radius=8, padx=10, pady=6, surface=bg)
@@ -497,10 +499,10 @@ class Workspace:
         self.record_menu_button.pack(side="right", padx=(Theme.px(2), 0))
         self.record_button = Button(right, text="Start transcribing", icon_name="mic", variant="primary", size="lg",
                                     command=lambda: self._act("toggle_recording"),
-                                    tooltip="Start or stop transcribing (Alt+R)")
+                                    tooltip=Theme.keys("Start or stop transcribing (Alt+R)"))
         self.record_button.pack(side="right")
         self.pause_button = Button(right, text="Pause", icon_name="pause", variant="secondary", size="lg",
-                                   command=lambda: self._act("toggle_pause"), tooltip="Pause or resume (Alt+P)")
+                                   command=lambda: self._act("toggle_pause"), tooltip=Theme.keys("Pause or resume (Alt+P)"))
 
         left = tk.Frame(self.header, bg=bg)
         left.pack(side="left", fill="x", expand=True)
@@ -555,7 +557,7 @@ class Workspace:
                                   surface=bg, command=self.copy_current, tooltip="Copy this tab to the clipboard")
         self.generate_button = Button(actions, text="Create note", icon_name="sparkle", variant="soft", size="sm",
                                       surface=bg, command=lambda: self._act("generate"),
-                                      tooltip="Create the note from the transcript (Ctrl+Enter)")
+                                      tooltip=Theme.keys("Create the note from the transcript (Ctrl+Enter)"))
         self.template_button = Button(actions, text="Template", icon_name="doc", trailing_icon="chevron-down",
                                       variant="secondary", size="sm", surface=bg,
                                       command=self._open_template_menu, tooltip="Note template and level of detail")
@@ -686,9 +688,9 @@ class Workspace:
         self.pages.grid_rowconfigure(0, weight=1)
         self.pages.grid_columnconfigure(0, weight=1)
 
-        self.context = TextArea(self.pages, placeholder=CONTEXT_PLACEHOLDER, padx=32,
+        self.context = TextArea(self.pages, placeholder=CONTEXT_PLACEHOLDER, padx=32, comfortable=True,
                                 on_change=lambda value: self._update_field("context", value))
-        self.transcript = TextArea(self.pages, placeholder=TRANSCRIPT_PLACEHOLDER, padx=32,
+        self.transcript = TextArea(self.pages, placeholder=TRANSCRIPT_PLACEHOLDER, padx=32, comfortable=True,
                                    on_change=lambda value: (self._update_field("transcript", value),
                                                             self._schedule_drug_check(self.transcript)))
         self.note = TextArea(self.pages, placeholder=NOTE_PLACEHOLDER, padx=32, reading=True,
@@ -800,6 +802,13 @@ class Workspace:
             self.start_screen.tkraise()
         elif self.start_screen.winfo_manager():
             self.start_screen.grid_remove()
+        # The start screen has its own note type cards; the toolbar has nothing to act on yet
+        showing = bool(self.start_screen.winfo_manager())
+        if showing == bool(self.tabs.actions.winfo_manager()):
+            if showing:
+                self.tabs.actions.pack_forget()
+            else:
+                self.tabs.actions.pack(side="right", fill="y")
         self._refresh_footer()
 
     def _leave_start_screen(self, tab_id):
@@ -852,10 +861,10 @@ class Workspace:
         inner.pack(expand=True, padx=Theme.px(10), pady=Theme.px(8))
         self.compact_record = Button(inner, icon_name="mic", variant="primary", size="md", pill=True, surface=bg,
                                      command=lambda: self._act("toggle_recording"),
-                                     tooltip="Start or stop transcribing (Alt+R)")
+                                     tooltip=Theme.keys("Start or stop transcribing (Alt+R)"))
         self.compact_record.pack(side="left")
         self.compact_pause = Button(inner, icon_name="pause", variant="neutral", size="md", pill=True, surface=bg,
-                                    command=lambda: self._act("toggle_pause"), tooltip="Pause or resume (Alt+P)")
+                                    command=lambda: self._act("toggle_pause"), tooltip=Theme.keys("Pause or resume (Alt+P)"))
         self.compact_pause.pack(side="left", padx=(Theme.px(6), 0))
         self.compact_time = tk.Label(inner, text="00:00", bg=bg, fg=Palette.TEXT, font=Theme.font("medium", "semibold"),
                                      width=6)
@@ -1523,8 +1532,10 @@ class Workspace:
             self.tabs.set_done(tab_id, bool(value.strip()))
         target = self.ask_target()
         can_ask = idle and target is not None
-        if can_ask != bool(self.suggestions.winfo_manager()):
-            if can_ask:
+        on_document = self.current_tab() == "note" or self.current_tab().startswith("doc:")
+        show_chips = can_ask and on_document
+        if show_chips != bool(self.suggestions.winfo_manager()):
+            if show_chips:
                 self.suggestions.pack(fill="x", pady=(0, Theme.px(8)), before=self.ask_frame)
             else:
                 self.suggestions.pack_forget()

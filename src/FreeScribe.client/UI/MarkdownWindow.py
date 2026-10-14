@@ -10,7 +10,24 @@ from utils.log_config import logger
 import re
 from UI.ImageWindow import ImageWindow
 from UI.Theme import Theme, Palette
+from UI.Widgets.Controls import Scrollbar
 from tkinter import ttk
+
+
+def _styled_html(html):
+    """Give the rendered Markdown the app's type scale and colours (tkhtmlview's defaults are very large)."""
+    family = Theme.font("base").actual("family")
+    sizes = {"h1": Theme.font_size("display"), "h2": Theme.font_size("title"), "h3": Theme.font_size("large"),
+             "h4": Theme.font_size("medium"), "h5": Theme.font_size("medium"), "h6": Theme.font_size("medium")}
+    for tag, size in sizes.items():
+        html = re.sub(rf"<{tag}>", f'<{tag} style="font-size: {size}px; color: {Palette.TEXT}; font-family: {family}">',
+                      html)
+    body = Theme.font_size("medium")
+    for tag in ("p", "li", "td", "th"):
+        html = re.sub(rf"<{tag}>", f'<{tag} style="font-size: {body}px; color: {Palette.TEXT}; font-family: {family}">',
+                      html)
+    html = re.sub(r"<a href", f'<a style="color: {Palette.PRIMARY}" href', html)
+    return html
 
 
 class MarkdownWindow:
@@ -96,14 +113,17 @@ class MarkdownWindow:
 
     def _create_main_content(self, html_content):
         """Create the main content area with scrollable HTMLLabel."""
-        frame = tk.Frame(self.window)
-        frame.pack(fill="both", expand=True, padx=10, pady=10)
+        self.window.configure(bg=Palette.BG)
+        frame = tk.Frame(self.window, bg=Palette.BG)
+        frame.pack(fill="both", expand=True, padx=(Theme.px(28), Theme.px(8)), pady=(Theme.px(20), Theme.px(8)))
 
-        self.html_label = HTMLLabel(frame, html=html_content, background=Palette.BG)
+        self.html_label = HTMLLabel(frame, html=_styled_html(html_content), background=Palette.BG,
+                                    relief="flat", borderwidth=0, highlightthickness=0,
+                                    padx=Theme.px(4), pady=Theme.px(4), spacing1=Theme.px(2), spacing3=Theme.px(4))
         self.html_label.pack(side="left", fill="both", expand=True)
 
-        self.scrollbar = tk.Scrollbar(frame, orient="vertical", command=self.html_label.yview)
-        self.scrollbar.pack(side="right", fill="y")
+        self.scrollbar = Scrollbar(frame, command=self.html_label.yview, surface=Palette.BG)
+        self.scrollbar.pack(side="right", fill="y", padx=(Theme.px(8), 0))
 
         self.html_label.config(yscrollcommand=self.scrollbar.set)
         self.html_label.bind('<Enter>', self._bind_mousewheel)

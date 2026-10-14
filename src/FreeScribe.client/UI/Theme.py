@@ -110,10 +110,23 @@ class Theme:
                 if isinstance(cache, dict):
                     cache.clear()
 
+    is_mac = False
+
+    @classmethod
+    def keys(cls, text: str) -> str:
+        """Shortcut labels as each platform writes them: "Alt+R" is "⌥R" and "Ctrl+N" is "⌘N" on a Mac."""
+        if not cls.is_mac:
+            return text
+        return text.replace("Ctrl+Enter", "⌘↩").replace("Ctrl+", "⌘").replace("Alt+", "⌥")
+
     @classmethod
     def init(cls, root: tk.Misc) -> None:
         """Detect scaling and fonts, then install ttk styles and Tk defaults."""
         cls._forget_images()
+        try:
+            cls.is_mac = root.tk.call("tk", "windowingsystem") == "aqua"
+        except tk.TclError:
+            cls.is_mac = False
         cls._detect_scale(root)
         cls._detect_fonts(root)
         cls._configure_named_fonts()

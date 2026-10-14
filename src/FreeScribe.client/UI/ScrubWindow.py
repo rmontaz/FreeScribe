@@ -1,6 +1,7 @@
 import tkinter as tk
-from tkinter import scrolledtext, ttk
+from tkinter import ttk
 from UI.Theme import Theme, Palette
+from UI.Widgets.Controls import Scrollbar
 
 import UI.Helpers
 from utils.file_utils import get_file_path
@@ -32,9 +33,19 @@ class ScrubWindow:
                       "Remove or replace anything that identifies the patient, then choose Proceed.").pack(
             fill="x", padx=Theme.px(20), pady=(Theme.px(4), Theme.px(10)))
 
-        # Create a scrolled text area
-        text_area = scrolledtext.ScrolledText(popup, height=20, width=80, wrap="word", font=Theme.font("medium"))
-        text_area.pack(padx=Theme.px(20), pady=0, fill="both", expand=True)
+        # The text to review, in a bordered box with the app's scrollbar
+        border = tk.Frame(popup, bg=Palette.BORDER_STRONG, padx=1, pady=1)
+        border.pack(padx=Theme.px(20), pady=0, fill="both", expand=True)
+        box = tk.Frame(border, bg=Palette.BG)
+        box.pack(fill="both", expand=True)
+        text_area = tk.Text(box, height=20, width=80, wrap="word", font=Theme.font("medium"), relief="flat", bd=0,
+                            padx=Theme.px(12), pady=Theme.px(10), bg=Palette.BG, fg=Palette.TEXT,
+                            insertbackground=Palette.TEXT, highlightthickness=0, spacing3=Theme.px(3),
+                            selectbackground=Palette.PRIMARY_SOFT_HOVER, selectforeground=Palette.TEXT, undo=True)
+        scrollbar = Scrollbar(box, command=text_area.yview, surface=Palette.BG)
+        text_area.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side="right", fill="y", padx=(0, Theme.px(4)), pady=Theme.px(6))
+        text_area.pack(side="left", fill="both", expand=True)
         text_area.insert(tk.END, cleaned_message)  # Insert the cleaned message into the text area
 
         def on_proceed():
