@@ -46,6 +46,8 @@ class MainWindowUI:
         self.debug_window_open = False  # Flag to indicate if the debug window is open
 
         self.warning_bar = None # Warning bar
+        self.workspace = None  # The main workspace UI, attached once it has been built
+        self.menu_bar = None  # Retained for compatibility; navigation now lives in the workspace sidebar
         
         if FeatureToggle.INTENT_ACTION:
             # Initialize intent action system
@@ -60,23 +62,23 @@ class MainWindowUI:
 
         self.current_docker_status_check_id = None  # ID for the current Docker status check
         self.current_container_status_check_id = None  # ID for the current container status check
-        self.root.bind("<<ProcessDataTab>>", self.__create_data_menu)  # Bind the destroy event to clean up resources
 
-        self.manage_app_data_menu = None  # Manage App Data menu
+    def attach_workspace(self, workspace):
+        """
+        Connect the main workspace so that warnings, status bars and the settings
+        lock are shown inside it.
+
+        :param workspace: The :class:`UI.Workspace.Workspace` instance.
+        """
+        self.workspace = workspace
 
     def load_main_window(self):
         """
         Load the main window of the application.
-        This method initializes the main window components, including the menu bar.
+        Brings the window to the front. Settings, help and data management are
+        reached from the workspace sidebar rather than a menu bar.
         """
         self._bring_to_focus()
-        self._create_menu_bar()
-
-        # Uncomment this once the UI is refactored to this class
-        # For now we need to force load it after all our widgets are created
-        # inside client.py. This is a temporary solution. 
-        # if (self.setting_window.settings.editable_settings['Show Welcome Message']):
-        #     self._show_welcome_message()
 
     def _bring_to_focus(self):
         """
@@ -100,8 +102,12 @@ class MainWindowUI:
             return
 
         # Create the frame for the Docker status bar, placed at the bottom of the window
-        self.docker_status_bar = tk.Frame(self.root, bd=1, relief=tk.SUNKEN)
-        self.docker_status_bar.grid(row=4, column=0, columnspan=14, sticky='nsew')
+        host = self.workspace.status_host if self.workspace is not None else self.root
+        self.docker_status_bar = tk.Frame(host, bd=1, relief=tk.SUNKEN)
+        if self.workspace is not None:
+            self.docker_status_bar.pack(fill='x')
+        else:
+            self.docker_status_bar.grid(row=4, column=0, columnspan=14, sticky='nsew')
 
         # Add a label to indicate Docker container status section
         self.docker_status = tk.Label(self.docker_status_bar, text="Docker Container Status:", padx=10)
@@ -147,48 +153,24 @@ class MainWindowUI:
 
     def create_warning_bar(self, text, closeButton=True):
         """
-        Create a warning bar at the bottom of the window to notify the user about microphone issues.
-        
-        :param text: Placeholder for text input (unused).
-        :param row: The row in the grid layout where the bar is placed.
-        :param column: The starting column for the grid layout.
-        :param columnspan: The number of columns spanned by the warning bar.
-        :param pady: Padding for the vertical edges.
-        :param padx: Padding for the horizontal edges.
-        :param sticky: Defines how the widget expands in the grid cell.
+        Show a warning banner at the top of the workspace, for example to tell the
+        user that no audio is being picked up by the microphone.
+
+        :param text: The message to display.
+        :param closeButton: Whether the user can dismiss the banner.
         """
-        # Create a frame for the warning bar with a sunken border and gold background
-        self.warning_bar = tk.Frame(self.root, bd=1, relief=tk.SUNKEN, background="gold")
-        self.warning_bar.grid(row=4, column=0, columnspan=14, sticky='nsew')
-
-        # Add a label to display the warning message in the warning bar
-        text_label = tk.Label(
-            self.warning_bar,
-            text=text,
-            foreground="black",  # Text color
-            background="gold"    # Matches the frame's background
-        )
-        text_label.pack(side=tk.LEFT)
-
-        if closeButton :
-            # Add a button to allow users to close the warning bar
-            close_button = tk.Button(
-                self.warning_bar,
-                text="X",
-                command=self.destroy_warning_bar,  # Call the destroy method when clicked
-                foreground="black"
-            )
-
-            close_button.pack(side=tk.RIGHT)
-
+        if self.workspace is not None:
+            self.workspace.show_warning(text, closable=closeButton, kind="silence")
+        # Any non-None value marks the warning as visible for callers that check it.
+        self.warning_bar = text
 
     def destroy_warning_bar(self):
         """
-        Destroy the warning bar if it exists to remove it from the UI.
+        Remove the warning banner if it is showing.
         """
         if self.warning_bar is not None:
-            # Destroy the warning bar frame and set the reference to None
-            self.warning_bar.destroy()
+            if self.workspace is not None:
+                self.workspace.hide_warning(kind="silence")
             self.warning_bar = None
 
     def disable_docker_ui(self):
@@ -242,93 +224,71 @@ class MainWindowUI:
 
     def toggle_menu_bar(self, enable: bool, is_recording: bool = False):
         """
-        Enable or disable the menu bar.
+        Re-apply the settings lock after switching between the full and compact views.
 
-        :param enable: True to enable the menu bar, False to disable it.
+        :param enable: True when the full view (with its navigation) is shown.
         :type enable: bool
+        :param is_recording: Whether a recording is in progress.
+        :type is_recording: bool
         """
-        if enable:
-            self._create_menu_bar()
-            if is_recording:
-                self.disable_settings_menu()
-        else:
-            self._destroy_menu_bar()
-
-    def _create_menu_bar(self):
-        """
-        Private method to create menu bar.
-        Create a menu bar with a Help menu.
-        This method sets up the menu bar at the top of the main window and adds a Help menu with an About option.
-        """
-        self.menu_bar = tk.Menu(self.root)
-        self.root.config(menu=self.menu_bar)
-        self._create_settings_menu()
-        self._create_help_menu()
-        self.__create_data_menu()
-
-    def _destroy_menu_bar(self):
-        """
-        Private method to destroy the menu bar.
-        Destroy the menu bar if it exists.
-        """
-        if self.menu_bar is not None:
-            self.menu_bar.destroy()
-            self.menu_bar = None
-            self._destroy_settings_menu()
-            self._destroy_help_menu()
-
-    def _create_settings_menu(self):
-        # Add Settings menu
-        setting_menu = tk.Menu(self.menu_bar, tearoff=0)
-        self.menu_bar.add_cascade(label="Settings", menu=setting_menu)
-        setting_menu.add_command(label="Settings", command=self.setting_window.open_settings_window)
-
-    def _destroy_settings_menu(self):
-        """
-        Private method to destroy the Settings menu.
-        Destroy the Settings menu if it exists.
-        """
-        if self.menu_bar is not None:
-            setting_menu = self.menu_bar.nametowidget('Settings')
-            if setting_menu is not None:
-                setting_menu.destroy()
-
-    def _create_help_menu(self):
-        # Add Help menu
-        help_menu = tk.Menu(self.menu_bar, tearoff=0)
-        self.menu_bar.add_cascade(label="Help", menu=help_menu)
-        help_menu.add_command(label="Help Guide", command=lambda: ImageWindow(self.root, "Help Guide", get_file_path('assets', 'help.png'), width=1000, height=686))
-        help_menu.add_command(label="Debug Window", command=lambda: DebugPrintWindow(self))
-        help_menu.add_command(label="About", command=lambda: self._show_md_content(get_file_path('markdown','help','about.md'), 'About'))
-
-    def _destroy_help_menu(self):
-        """
-        Private method to destroy the Help menu.
-        Destroy the Help menu if it exists.
-        """
-        if self.menu_bar is not None:
-            help_menu = self.menu_bar.nametowidget('Help')
-            if help_menu is not None:
-                help_menu.destroy()
+        if enable and is_recording:
+            self.disable_settings_menu()
 
     def disable_settings_menu(self):
         """
-        Disable the Settings menu.
+        Disable access to Settings (while recording or while models are loading).
         """
         def action():
-            if self.menu_bar is not None:
-                self.menu_bar.entryconfig("Settings", state="disabled")  # Disables the entire Settings menu
+            if self.workspace is not None:
+                self.workspace.set_settings_enabled(False)
         self.root.after(0, action)  # Schedule the action to run after the current event loop
-    
+
     def enable_settings_menu(self):
         """
-        Enable the Settings menu.
+        Re-enable access to Settings.
         """
         def action():
-            if self.menu_bar is not None:
-                self.menu_bar.entryconfig("Settings", state="normal")
+            if self.workspace is not None:
+                self.workspace.set_settings_enabled(True)
 
         self.root.after(0, action)  # Schedule the action to run after the current event loop
+
+    def open_settings(self):
+        """Open the settings window."""
+        self.setting_window.open_settings_window()
+
+    def open_help_guide(self):
+        """Show the annotated guide to the main window."""
+        ImageWindow(self.root, "Help Guide", get_file_path('assets', 'help.png'), width=1250, height=858)
+
+    def open_about(self):
+        """Show the About page."""
+        self._show_md_content(get_file_path('markdown', 'help', 'about.md'), 'About')
+
+    def open_debug_window(self):
+        """Open the debug output window."""
+        DebugPrintWindow(self)
+
+    def open_recordings_manager(self):
+        """Open the stored recordings manager."""
+        RecordingsManager(self.root)
+
+    def open_log_window(self):
+        """Open the log manager."""
+        LogWindow(self.root)
+
+    def data_options(self):
+        """
+        Which data managers are available, based on the current settings.
+
+        :returns: ``{"recordings": bool, "logs": bool}``
+        :rtype: dict
+        """
+        settings = self.app_settings.editable_settings
+        return {
+            "recordings": bool(settings[SettingsKeys.STORE_RECORDINGS_LOCALLY.value]),
+            "logs": bool(settings[SettingsKeys.ENABLE_FILE_LOGGER.value]),
+        }
 
     def _show_md_content(self, file_path: str, title: str, show_checkbox: bool = False):
         """
@@ -399,37 +359,6 @@ class MainWindowUI:
             self.logic.container_manager.set_status_icon_color(whisper_dot, self.logic.check_whisper_containers())
             self.current_container_status_check_id = self.root.after(DOCKER_CONTAINER_CHECK_INTERVAL, self._background_check_container_status, llm_dot, whisper_dot)
     
-    def __create_data_menu(self, event=None):
-        logger.info("Creating Manage App Data menu")
-
-        # Add the submenu to the main menu bar
-        if self.manage_app_data_menu is not None:
-            self.manage_app_data_menu.destroy()
-            try:
-                self.menu_bar.delete("Manage App Data")
-            except tk.TclError:
-                logger.debug("Manage App Data menu not found in menu bar")
-
-            self.manage_app_data_menu = None
-
-            logger.debug("Manage App Data menu destroyed")
-
-        self.manage_app_data_menu = tk.Menu(self.menu_bar, tearoff=0)
-        settings_enabled = 0
-        if self.app_settings.editable_settings[SettingsKeys.STORE_RECORDINGS_LOCALLY.value]:
-            self.manage_app_data_menu.add_command(label="Manage Recordings", command=lambda: RecordingsManager(self.root))
-            settings_enabled += 1
-            logger.debug("Manage Recordings option added to menu")
-        
-        if self.app_settings.editable_settings[SettingsKeys.ENABLE_FILE_LOGGER.value]:
-            self.manage_app_data_menu.add_command(label="Manage Logs", command=lambda: LogWindow(self.root))
-            settings_enabled += 1
-            logger.debug("Manage Logs option added to menu")
-
-        if settings_enabled > 0:
-            self.menu_bar.add_cascade(label="Manage App Data", menu=self.manage_app_data_menu)
-            logger.debug("Manage App Data menu added to menu bar")
-
     def get_text_intents(self, text: str) -> None:
         """
         Process transcribed text for intents and execute actions.

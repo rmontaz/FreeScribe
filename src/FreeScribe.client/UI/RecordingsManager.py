@@ -96,16 +96,16 @@ class RecordingsManager:
         buttons_frame = Frame(self.popup)
         buttons_frame.pack(fill='x', padx=10, pady=5)
 
-        self.play_button = Button(buttons_frame, text="▶️", command=self.toggle_playback, width=5)
+        self.play_button = Button(buttons_frame, text="Play", command=self.toggle_playback, width=7)
         self.play_button.pack(side='left', padx=5)
 
-        self.delete_button = Button(buttons_frame, text="🗑️ Delete", command=self.delete_recording)
+        self.delete_button = Button(buttons_frame, text="Delete", command=self.delete_recording)
         self.delete_button.pack(side='left', padx=5)
 
-        self.save_button = Button(buttons_frame, text="💾 Save Unencrypted", command=self.save_unencrypted)
+        self.save_button = Button(buttons_frame, text="Save Unencrypted", command=self.save_unencrypted)
         self.save_button.pack(side='left', padx=5)
 
-        self.generate_button = Button(buttons_frame, text="📝 Generate Note", command=self.generate_note)
+        self.generate_button = Button(buttons_frame, text="Generate Note", command=self.generate_note)
         self.generate_button.pack(side='left', padx=5)
 
         self.close_button = Button(buttons_frame, text="Close", command=self.on_close)
@@ -156,7 +156,7 @@ class RecordingsManager:
             self.is_paused = False
             self.current_file = filename
             self.current_position = 0
-            self.play_button.config(text="⏸️")
+            self.play_button.config(text="Pause")
 
             threading.Thread(target=self.play_audio, daemon=True).start()
             self.update_position()
@@ -199,7 +199,7 @@ class RecordingsManager:
             self.play_selected()
         else:
             self.is_paused = not self.is_paused
-            self.play_button.config(text="▶️" if self.is_paused else "⏸️")
+            self.play_button.config(text="Play" if self.is_paused else "Pause")
 
     def stop_playback(self):
         """Stop current playback and clean up resources"""
@@ -215,7 +215,7 @@ class RecordingsManager:
         if self.wf_buffer:
             self.wf_buffer.close()
             self.wf_buffer = None
-        self.play_button.config(text="▶️")
+        self.play_button.config(text="Play")
 
     def seek_position(self, pos):
         """Seek to specific position in recording"""

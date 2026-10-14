@@ -9,6 +9,8 @@ from utils.utils import get_application_version
 from utils.log_config import logger
 import re
 from UI.ImageWindow import ImageWindow
+from UI.Theme import Theme, Palette
+from tkinter import ttk
 
 
 class MarkdownWindow:
@@ -64,7 +66,8 @@ class MarkdownWindow:
         self.window.title(self.title)
         self.window.transient(self.parent)
         self.window.grab_set()
-        self.window.iconbitmap(get_file_path('assets', 'logo.ico'))
+        # Works on every platform (a bare .ico is not accepted on Linux)
+        UI.Helpers.set_window_icon(self.window)
 
         # Store parent's original mousewheel binding
         self.parent_mousewheel_binding = self.parent.bind_all("<MouseWheel>")
@@ -96,7 +99,7 @@ class MarkdownWindow:
         frame = tk.Frame(self.window)
         frame.pack(fill="both", expand=True, padx=10, pady=10)
 
-        self.html_label = HTMLLabel(frame, html=html_content)
+        self.html_label = HTMLLabel(frame, html=html_content, background=Palette.BG)
         self.html_label.pack(side="left", fill="both", expand=True)
 
         self.scrollbar = tk.Scrollbar(frame, orient="vertical", command=self.html_label.yview)
@@ -108,8 +111,9 @@ class MarkdownWindow:
 
     def _create_footer(self, version):
         """Create the footer with buttons and version information."""
-        footer_frame = tk.Frame(self.window, bg="lightgray")
-        footer_frame.pack(side=tk.BOTTOM, fill="x", pady=5)
+        footer_frame = tk.Frame(self.window, bg=Palette.SIDEBAR)
+        footer_frame.pack(side=tk.BOTTOM, fill="x")
+        tk.Frame(self.window, bg=Palette.BORDER, height=1).pack(side=tk.BOTTOM, fill="x")
 
         if self.callback:
             var = tk.BooleanVar()
@@ -117,33 +121,35 @@ class MarkdownWindow:
                 footer_frame,
                 text="Don't show this message again",
                 variable=var,
-                bg="lightgray"
+                bg=Palette.SIDEBAR,
+                activebackground=Palette.SIDEBAR,
+                selectcolor=Palette.SIDEBAR
             )
-            check_button.grid(row=0, column=0, padx=5, pady=3)
+            check_button.grid(row=0, column=0, padx=Theme.px(10), pady=(Theme.px(8), 0))
 
-            close_button = tk.Button(
+            close_button = ttk.Button(
                 footer_frame,
                 text="Close",
                 command=lambda: self._on_close(var, self.callback),
-                width=6
+                style="Accent.TButton"
             )
-            close_button.grid(row=1, column=0, padx=5, pady=3)
+            close_button.grid(row=1, column=0, padx=Theme.px(10), pady=Theme.px(8))
         else:
-            close_button = tk.Button(
+            close_button = ttk.Button(
                 footer_frame,
                 text="Close",
-                command=self._on_window_close,
-                width=6
+                command=self._on_window_close
             )
-            close_button.grid(row=0, column=0, padx=5, pady=3)
+            close_button.grid(row=0, column=0, padx=Theme.px(10), pady=Theme.px(8))
 
         version_label = tk.Label(
             footer_frame,
             text=f"Version: {version}",
             pady=2,
-            padx=5,
-            relief="sunken",
-            font=("Arial", 8)
+            padx=Theme.px(10),
+            bg=Palette.SIDEBAR,
+            fg=Palette.TEXT_FAINT,
+            font=Theme.font("micro")
         )
         version_label.grid(row=0, column=1, sticky='e')
 
@@ -155,7 +161,7 @@ class MarkdownWindow:
         help_button_frame = tk.Frame(self.window)
         help_button_frame.pack(side=tk.BOTTOM, fill="x", pady=5)
 
-        help_button = tk.Button(
+        help_button = ttk.Button(
             help_button_frame,
             text="Click to View Interface Guide",
             command=lambda: self._open_image_window()
@@ -164,7 +170,7 @@ class MarkdownWindow:
 
     def _open_image_window(self):
         """Open a new window to display the help guide image."""
-        image_window = ImageWindow(self.parent, "Help Guide", get_file_path('assets', 'help.png'), width=1000, height=686)
+        image_window = ImageWindow(self.parent, "Help Guide", get_file_path('assets', 'help.png'), width=1250, height=858)
         image_window.window.transient(self.window)  # Set ImageWindow as transient to MarkdownWindow
         image_window.window.grab_set()              # Ensure ImageWindow gets focus
         image_window.window.focus_force()           # Force focus on ImageWindow

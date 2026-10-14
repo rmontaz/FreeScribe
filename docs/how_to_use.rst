@@ -81,9 +81,24 @@ To start using FreeScribe:
 Workflow Example
 ----------------
 
-1. **Start Transcription**: Click on the "Start recording" button to begin capturing audio.
-2. **Generate Notes**: Once the session is complete, click on "Stop Recording" and the note will begin to automatically generate.
-3. **Export**: It automatically saves the note to your clipboard to be pasted anywhere. It also can be copied by clicking the copy text button. 
+1. **Start Transcription**: Click on the "Start transcribing" button (Alt+R) to begin capturing audio. A new session is created for the visit; you can name it in the title field, for example with the patient's name.
+2. **Add Context (optional)**: Use the "Context" tab for anything that was not said aloud but should inform the note, such as relevant history, vitals or results.
+3. **Generate Notes**: Once the visit is complete, click on "Stop transcribing" and the note will begin to automatically generate. Choose a different note template or level of detail from the template menu and click "Regenerate" to apply it.
+4. **Refine**: The note can be edited directly. You can also describe a change in the bar at the bottom of the window (for example "make the plan more concise") and undo it if you do not like the result.
+5. **More Documents**: The "+" next to the tabs creates further documents from the same session, such as a referral letter or a plain-language summary for the patient.
+6. **Export**: The note is automatically saved to your clipboard to be pasted anywhere. It can also be copied with the "Copy" button, or saved as a Word, PDF or text file with "Export".
+
+Sessions
+--------
+
+Every visit is kept as a session in the sidebar on the left, grouped by day. Click a session to reopen it, right-click it to rename or delete it, and use the search box to find one by name or by words in its transcript or note.
+
+By default sessions are cleared when FreeScribe closes. Turn on "Store Notes Locally (Encrypted)" in the settings to keep them between runs.
+
+Compact Recorder
+----------------
+
+The button at the top of the sidebar shrinks FreeScribe to a small bar that stays on top of other windows, with record, pause, a timer and the microphone level. Click the expand button to return to the full window.
 
 Additional Help
 ---------------

@@ -34,6 +34,8 @@ from UI.MarkdownWindow import MarkdownWindow
 from UI.SettingsWindow import SettingsWindow
 from UI.SettingsConstant import SettingsKeys, Architectures, FeatureToggle
 from UI.Widgets.PopupBox import PopupBox
+from UI.Theme import Theme, Palette
+from UI.Icons import icon
 import utils.log_config
 from utils.log_config import logger
 from constants.whisper_languages import WHISPER_LANGUAGE_CODES
@@ -453,10 +455,11 @@ class SettingsWindowUI:
         thread = threading.Thread(target=self.settings.update_models_dropdown, args=(self.models_drop_down,))
         thread.start()
 
-        refresh_button = ttk.Button(left_frame, text="↻", 
+        # A drawn icon rather than a "↻" glyph, which not every system font includes
+        refresh_button = ttk.Button(left_frame, image=icon("refresh", 15, Palette.TEXT),
                                 command=self._refresh_models,
-                                width=4)
-        refresh_button.grid(row=left_row, column=2, padx=0, pady=5, sticky="w")
+                                padding=(Theme.px(7), Theme.px(5)))
+        refresh_button.grid(row=left_row, column=2, padx=(Theme.px(4), 0), pady=5, sticky="w")
 
         left_row += 1
 
@@ -841,24 +844,29 @@ pady=5, sticky="w")
         This method creates and places buttons for saving settings, resetting to default,
         and closing the settings window.
         """
-        footer_frame = tk.Frame(self.main_frame,bg="lightgray", height=30)
+        footer_bg = Palette.SIDEBAR
+        footer_frame = tk.Frame(self.main_frame, bg=footer_bg)
         footer_frame.pack(side="bottom", fill="x")
+        tk.Frame(self.main_frame, bg=Palette.BORDER, height=1).pack(side="bottom", fill="x")
+
+        pad_y = Theme.px(10)
 
         # Place the "Help" button on the left
-        tk.Button(footer_frame, text="Help", width=10, command=self.create_help_window).pack(side="left", padx=2, pady=5)
+        ttk.Button(footer_frame, text="Help", width=10, command=self.create_help_window).pack(side="left", padx=(Theme.px(12), 2), pady=pad_y)
 
         # Place the label in the center
         version = get_application_version()
-        tk.Label(footer_frame, text=f"FreeScribe Client {version}",bg="lightgray",fg="black").pack(side="left", expand=True, padx=2, pady=5)
+        tk.Label(footer_frame, text=f"FreeScribe Client {version}", bg=footer_bg, fg=Palette.TEXT_FAINT,
+                 font=Theme.font("small")).pack(side="left", expand=True, padx=2, pady=pad_y)
 
         # Create a frame for the right-side elements
-        right_frame = tk.Frame(footer_frame,bg="lightgray")
-        right_frame.pack(side="right")
+        right_frame = tk.Frame(footer_frame, bg=footer_bg)
+        right_frame.pack(side="right", padx=(0, Theme.px(12)))
 
-        # Pack all other buttons into the right frame
-        tk.Button(right_frame, text="Close", width=10, command=self.close_window).pack(side="right", padx=2, pady=5)
-        tk.Button(right_frame, text="Default", width=10, command=self.reset_to_default).pack(side="right", padx=2, pady=5)
-        tk.Button(right_frame, text="Save", width=10, command=self.save_settings).pack(side="right", padx=2, pady=5)
+        # Pack all other buttons into the right frame; Save is the primary action
+        ttk.Button(right_frame, text="Save", width=10, command=self.save_settings, style="Accent.TButton").pack(side="right", padx=(Theme.px(6), 0), pady=pad_y)
+        ttk.Button(right_frame, text="Close", width=10, command=self.close_window).pack(side="right", padx=(Theme.px(6), 0), pady=pad_y)
+        ttk.Button(right_frame, text="Default", width=10, command=self.reset_to_default).pack(side="right", pady=pad_y)
 
     def create_help_window(self):
         """

@@ -1,67 +1,98 @@
-import tkinter as tk
+"""
+MicrophoneTestFrame.py
+
+Keeps track of the available microphones, the one in use, and its live input
+level.
+
+Earlier versions of this class also built their own drop-down and volume bar.
+The workspace now draws those itself (a microphone picker and a level meter in
+the session header), so this class is purely the model behind them: it owns the
+monitoring audio stream, exposes ``level`` / ``status_text`` and lets the UI
+subscribe to changes with :meth:`add_listener`.
+
+This software is released under the AGPL-3.0 license.
+"""
+
 from tkinter import ttk
 import pyaudio
 import numpy as np
-from PIL import Image, ImageTk
-from utils.file_utils import get_file_path
-from UI.SettingsWindowUI import SettingsWindowUI
 from utils.log_config import logger
+
 
 class MicrophoneState:
     SELECTED_MICROPHONE_INDEX = None
     SELECTED_MICROPHONE_NAME = None
 
+
 class MicrophoneTestFrame:
-    def __init__(self, parent, p, app_settings, root, layout_mode='vertical'):
+    POLL_INTERVAL_MS = 50
+    FRAMES_PER_BUFFER = 1024
+    MAX_FRAMES_PER_POLL = 8192
+
+    def __init__(self, parent, p, app_settings, root):
         """
-        Initialize the MicrophoneTestFrame.
+        Initialize the microphone monitor.
 
         Parameters
         ----------
         parent : tk.Widget
-            The parent widget where the frame will be placed.
+            A widget that outlives the monitor; used to schedule polling.
         p : pyaudio.PyAudio
             The PyAudio instance for audio operations.
-        app_settings : dict
+        app_settings : SettingsWindow
             Application settings including editable settings.
-        layout_mode : str
-            Layout mode: 'vertical' (default) or 'horizontal'
+        root : tk.Tk
+            The application root window.
         """
         self.root = root
         self.parent = parent
         self.p = p
         self.app_settings = app_settings
-        self.layout_mode = layout_mode
         self.stream = None  # Persistent audio stream
         self.is_stream_active = False  # Track if the stream is active
 
-        # Style colours for the volume meter segments
-        self.style_colours = {
-            'green': '#2ecc71',
-            'yellow': '#f1c40f',
-            'red': '#e74c3c',
-            'inactive': '#95a5a6'
-        }
+        self.level = 0.0  # Current input level, 0.0 - 1.0
+        self.status_text = "Microphone: Ready"
+        self.status_ok = True
+        self.enabled = True  # False while recording: the microphone cannot be changed
+        self._listeners = []
 
-        self.setting_window = SettingsWindowUI(self.app_settings, self, self.root)  # Settings window
-
-        # Create a frame for the microphone test
+        # Never laid out; it only anchors the polling timer to the widget tree.
         self.frame = ttk.Frame(self.parent)
-        self.frame.grid(row=1, column=0, sticky='nsew')
+
+        self.mic_list = []
+        self.mic_mapping = {}
+        self.default_input_index = None
 
         # Initialize microphone list and settings
         self.initialize_microphones()
-
-        # Create mic test UI
-        self.create_mic_test_ui()
+        self.refresh_devices()
 
         # Start volume meter updates
         self.update_volume_meter()
 
         # Initialize the selected microphone
         self.initialize_selected_microphone()
-        self._frame_original_styles = {}
 
+    # ---------------------------------------------------------------- listeners
+    def add_listener(self, callback):
+        """Register ``callback()`` to be called when the selection or status changes."""
+        self._listeners.append(callback)
+
+    def _notify(self):
+        for callback in list(self._listeners):
+            try:
+                callback()
+            except Exception as e:
+                logger.exception(f"Microphone listener failed: {e}")
+
+    def _set_status(self, text, ok):
+        changed = (text, ok) != (self.status_text, self.status_ok)
+        self.status_text, self.status_ok = text, ok
+        if changed:
+            self._notify()
+
+    # ------------------------------------------------------------------ devices
     def initialize_microphones(self):
         """
         Initialize the list of available microphones.
@@ -76,8 +107,13 @@ class MicrophoneTestFrame:
             logger.exception(f"Failed to initialize microphone ({type(e).__name__}): {e}")
             self.default_input_index = None
 
-        device_count = self.p.get_device_count()
-        defaultHostApi = self.p.get_default_host_api_info()
+        try:
+            device_count = self.p.get_device_count()
+            defaultHostApi = self.p.get_default_host_api_info()
+        except (IOError, OSError) as e:
+            logger.exception(f"Failed to list audio devices ({type(e).__name__}): {e}")
+            return
+
         for i in range(device_count):
             device_info = self.p.get_device_info_by_index(i)
             if device_info['maxInputChannels'] > 0 and device_info['hostApi'] == defaultHostApi['index']:
@@ -87,224 +123,18 @@ class MicrophoneTestFrame:
                     self.mic_mapping[device_name] = i
         # Load the selected microphone from settings if available
         if self.app_settings and "Current Mic" in self.app_settings.editable_settings:
-            selected_name = self.app_settings.editable_settings["Current Mic"]            
+            selected_name = self.app_settings.editable_settings["Current Mic"]
             if selected_name in self.mic_mapping:
                 MicrophoneState.SELECTED_MICROPHONE_NAME = selected_name
                 MicrophoneState.SELECTED_MICROPHONE_INDEX = self.mic_mapping[selected_name]
 
-    def _create_dropdown(self, parent_frame, width=40, **grid_kwargs):
-        """
-        Create the microphone selection dropdown and grid it immediately.
-        
-        Parameters
-        ----------
-        parent_frame : tk.Widget
-            The parent frame to place the dropdown in.
-        width : int
-            The width of the dropdown.
-        **grid_kwargs : dict
-            Additional grid configuration options.
-            
-        Returns
-        -------
-        ttk.Combobox
-            The created dropdown widget.
-        """
-        # Dropdown for microphone selection
-        mic_options = [f"{name}" for _, name in self.mic_list]
-        mic_dropdown = ttk.Combobox(
-            parent_frame, 
-            values=mic_options, 
-            state='readonly', 
-            width=width,
-            style='Mic.TCombobox'
-        )
-        
-        # Set the default selection
-        if MicrophoneState.SELECTED_MICROPHONE_NAME:
-            mic_dropdown.set(MicrophoneState.SELECTED_MICROPHONE_NAME)
-        elif self.mic_list:
-            mic_dropdown.current(0)
-        
-        # Bind selection change to save immediately
-        mic_dropdown.bind('<<ComboboxSelected>>', self.on_mic_change)
-        mic_dropdown.bind('<Button-1>', self.on_dropdown_click)  # Bind click event
-        
-        # Grid the dropdown
-        mic_dropdown.grid(**grid_kwargs)
-        
-        return mic_dropdown
+    def microphone_names(self):
+        """Names of the available input devices."""
+        return [name for _, name in self.mic_list]
 
-    def _create_volume_meter(self, parent_frame, **grid_kwargs):
-        """
-        Create the volume meter with microphone icon and segments, and grid it immediately.
-        
-        Parameters
-        ----------
-        parent_frame : tk.Widget
-            The parent frame to place the volume meter in.
-        **grid_kwargs : dict
-            Additional grid configuration options.
-            
-        Returns
-        -------
-        tuple
-            A tuple containing (meter_frame, segments_frame, segments_list).
-        """
-        # Volume meter container
-        meter_frame = ttk.Frame(parent_frame)
-        
-        # Configure meter frame grid
-        meter_frame.grid_columnconfigure(0, weight=0)  # Icon column
-        meter_frame.grid_columnconfigure(1, weight=1)  # Segments column
-        meter_frame.grid_rowconfigure(0, weight=1)
-
-        # Try to load mic icon
-        try:
-            mic_icon = Image.open(get_file_path('assets', 'mic_icon.png'))
-            mic_icon = mic_icon.resize((24, 24))
-            self.mic_photo = ImageTk.PhotoImage(mic_icon)
-            mic_icon_label = ttk.Label(meter_frame, image=self.mic_photo)
-            mic_icon_label.grid(row=0, column=0, padx=(5, 5), sticky='w')
-        except Exception as e:
-            logger.exception(f"Error loading microphone icon: {e}")
-
-        # Create volume meter segments
-        segments_frame = ttk.Frame(meter_frame)
-        segments_frame.grid(row=0, column=1, sticky='nsew')
-
-        # Create segments
-        self.SEGMENT_COUNT = 20
-        segments = []
-        for i in range(self.SEGMENT_COUNT):
-            segment = tk.Frame(segments_frame, width=10, height=20)
-            segment.grid(row=0, column=i, padx=1)
-            segment.grid_propagate(False)
-            segments.append(segment)
-
-        # Grid the meter frame
-        meter_frame.grid(**grid_kwargs)
-
-        return meter_frame, segments_frame, segments
-
-    def _create_status_label(self, parent_frame, **grid_kwargs):
-        """
-        Create the status label for microphone feedback and grid it immediately.
-        
-        Parameters
-        ----------
-        parent_frame : tk.Widget
-            The parent frame to place the status label in.
-        **grid_kwargs : dict
-            Additional grid configuration options.
-            
-        Returns
-        -------
-        ttk.Label
-            The created status label widget.
-        """
-        status_label = ttk.Label(parent_frame, text="Microphone: Ready", foreground="green")
-        
-        # Grid the status label
-        status_label.grid(**grid_kwargs)
-        
-        return status_label
-
-    def create_mic_test_ui(self):
-        """
-        Create the UI elements for microphone testing.
-        """
-        # Create styles for all elements
-        style = ttk.Style()
-        style.configure('Disabled.TFrame', background='lightgray')  # Gray background for disabled state 
-        style.configure('Mic.TCombobox', padding=(5, 5, 5, 5))
-
-        if self.layout_mode == 'horizontal':
-            self.create_horizontal_layout()
-        else:
-            self.create_vertical_layout()
-
-    def create_vertical_layout(self):
-        """
-        Create the original vertical layout.
-        """
-        # Frame for dropdown
-        dropdown_frame = ttk.Frame(self.frame)
-        dropdown_frame.grid(row=0, column=0, sticky='nsew', pady=(0, 5))
-
-        # Create a container frame for center alignment
-        center_frame = ttk.Frame(dropdown_frame)
-        center_frame.grid(row=0, column=0, sticky='nsew')
-
-        # Configure the center frame to center-align the dropdown
-        center_frame.grid_rowconfigure(0, weight=1)
-        center_frame.grid_columnconfigure(0, weight=1)
-
-        # Create and grid dropdown
-        self.mic_dropdown = self._create_dropdown(
-            center_frame, 
-            width=40, 
-            row=0, column=0, pady=(0, 5), padx=(10, 0), sticky='nsew'
-        )
-
-        # Create and grid volume meter
-        meter_frame, self.segments_frame, self.segments = self._create_volume_meter(
-            self.frame, 
-            row=1, column=0, sticky='nsew', pady=(0, 0)
-        )
-        
-        # Adjust the icon padding for vertical layout
-        if hasattr(self, 'mic_photo'):
-            for child in meter_frame.winfo_children():
-                if isinstance(child, ttk.Label) and child.cget('image'):
-                    child.grid_configure(padx=(5, 0))
-                    break
-
-        # Create and grid status label
-        self.status_label = self._create_status_label(
-            self.frame, 
-            row=2, column=0, pady=(0, 0), padx=(10, 0), sticky='nsew'
-        )
-        
-        self.on_dropdown_click(None)
-
-    def create_horizontal_layout(self):
-        """
-        Create the horizontal layout with dropdown to the left of volume meter.
-        """
-        # Main horizontal container
-        main_frame = ttk.Frame(self.frame)
-        main_frame.grid(row=0, column=0, sticky='nsew', padx=5, pady=5)
-        
-        # Configure grid weights for horizontal layout
-        main_frame.grid_columnconfigure(0, weight=0)  # Dropdown column - fixed width
-        main_frame.grid_columnconfigure(1, weight=1)  # Volume meter column - expandable
-        main_frame.grid_rowconfigure(0, weight=1)
-
-        # Dropdown frame (left side)
-        dropdown_frame = ttk.Frame(main_frame)
-        dropdown_frame.grid(row=0, column=0, sticky='nsew', padx=(0, 10))
-
-        # Create and grid dropdown
-        self.mic_dropdown = self._create_dropdown(
-            dropdown_frame, 
-            width=25, 
-            row=0, column=0, sticky='ew'
-        )
-
-        # Create and grid volume meter (right side)
-        meter_frame, self.segments_frame, self.segments = self._create_volume_meter(
-            main_frame, 
-            row=0, column=1, sticky='nsew'
-        )
-
-        # Create and grid status label (below the main frame)
-        self.status_label = self._create_status_label(
-            self.frame, 
-            row=1, column=0, pady=(5, 0), sticky='ew'
-        )
-        
-        self.on_dropdown_click(None)
+    @property
+    def selected_name(self):
+        return MicrophoneState.SELECTED_MICROPHONE_NAME
 
     def initialize_selected_microphone(self):
         """
@@ -314,56 +144,81 @@ class MicrophoneTestFrame:
             self.update_selected_microphone(MicrophoneState.SELECTED_MICROPHONE_INDEX)
         elif self.mic_list:
             self.update_selected_microphone(self.mic_list[0][0])
+        self._notify()
 
-    def on_mic_change(self, event):
+    def select_microphone(self, selected_name):
         """
-        Handle the event when a microphone is selected from the dropdown.
+        Switch to the named microphone and remember the choice.
         """
-        selected_name = self.mic_dropdown.get()
+        if not self.enabled:
+            return
         if selected_name in self.mic_mapping:
             selected_index = self.mic_mapping[selected_name]
             self.update_selected_microphone(selected_index)
             # save the settings to the file
-            self.setting_window.settings.save_settings_to_file()
-            # Reopen the stream with the new device
-            self.reopen_stream()  
+            self.app_settings.save_settings_to_file()
+            self._notify()
 
-    def on_dropdown_click(self, event):
+    def refresh_devices(self):
         """
-        Handle the event when the dropdown is clicked.
+        Re-scan the audio devices (microphones may have been plugged in or removed).
         """
-        # Check if the dropdown is disabled
-        if 'disabled' in self.mic_dropdown.state():
-            return  # Ignore the click if disabled
+        if not self.enabled:
+            return  # Ignore while recording
 
         # Get the current selected microphone name
-        current_selected_name = self.mic_dropdown.get()
+        current_selected_name = MicrophoneState.SELECTED_MICROPHONE_NAME
 
-        # Reinitialize PyAudio
+        # Release the monitoring stream before PortAudio is restarted
+        self._close_stream()
+
+        # Reinitialize PyAudio so that newly connected devices are listed
         if self.p:
-            self.p.terminate()
+            try:
+                self.p.terminate()
+            except Exception as e:
+                logger.exception(f"Error terminating PyAudio: {e}")
         self.p = pyaudio.PyAudio()
 
         # Reinitialize the microphone list
         self.initialize_microphones()
 
-        # Update the dropdown menu
-        mic_options = [f"{name}" for _, name in self.mic_list]
-        self.mic_dropdown['values'] = mic_options
-
         # Check if the selected microphone is still available
         if current_selected_name in [name for _, name in self.mic_list]:
-            self.mic_dropdown.set(current_selected_name)
+            MicrophoneState.SELECTED_MICROPHONE_INDEX = self.mic_mapping[current_selected_name]
             # Reopen the stream with the current selected microphone
             self.reopen_stream()
         elif self.mic_list:
             # If the selected microphone is no longer available, select the first one
             self.update_selected_microphone(self.mic_list[0][0])
-            self.mic_dropdown.set(self.mic_list[0][1])
         else:
-            self.status_label.config(text="Error: No microphones available", foreground="red")
             MicrophoneState.SELECTED_MICROPHONE_INDEX = None
             MicrophoneState.SELECTED_MICROPHONE_NAME = None
+            self._set_status("Error: No microphones available", False)
+        self._notify()
+
+    def _close_stream(self):
+        if self.stream:
+            try:
+                if self.stream.is_active():
+                    self.stream.stop_stream()
+                self.stream.close()
+            except Exception as e:
+                logger.exception(f"Error closing stream: {e}")
+        self.stream = None
+        self.is_stream_active = False
+        self.level = 0.0
+
+    def _open_stream(self, device_index):
+        self.stream = self.p.open(
+            format=pyaudio.paInt16,  # Specifies the format of the audio data. paInt16 means 16-bit int PCM.
+            channels=1,             # Specifies the number of channels. 1 for mono, 2 for stereo.
+            rate=16000,             # Specifies the sampling rate in Hz. 16000 Hz is a common rate for speech.
+            input=True,             # Indicates that this stream will be used for input (recording).
+            frames_per_buffer=self.FRAMES_PER_BUFFER,  # Number of samples (per channel) in each buffer.
+            input_device_index=device_index  # Specifies the index of the input device to use.
+        )
+        self.is_stream_active = True
 
     def update_selected_microphone(self, selected_index):
         """
@@ -379,117 +234,81 @@ class MicrophoneTestFrame:
                 selected_mic = self.p.get_device_info_by_index(selected_index)
                 MicrophoneState.SELECTED_MICROPHONE_INDEX = selected_mic["index"]
                 MicrophoneState.SELECTED_MICROPHONE_NAME = selected_mic["name"]
-                self.status_label.config(text="Microphone: Connected", foreground="green")
                 self.app_settings.editable_settings["Current Mic"] = selected_mic["name"]
 
-                # Close existing stream if any
-                if self.stream:
-                    if self.stream.is_active():
-                        self.stream.stop_stream()
-                    self.stream.close()
-                self.stream = None
-                self.is_stream_active = False
-                # Open new stream with the selected microphone
-                self.stream = self.p.open(
-                    format=pyaudio.paInt16,  # Specifies the format of the audio data. paInt16 means 16-bit int PCM.
-                    channels=1,             # Specifies the number of channels. 1 for mono, 2 for stereo.
-                    rate=16000,             # Specifies the sampling rate in Hz. 16000 Hz is a common rate for speech.
-                    input=True,             # Indicates that this stream will be used for input (recording).
-                    frames_per_buffer=1024, # Specifies the number of samples (per channel) to read in each buffer.
-                    input_device_index=selected_index  # Specifies the index of the input device to use.
-                )
-                self.is_stream_active = True
+                # Close existing stream if any, then open one on the selected microphone
+                self._close_stream()
+                self._open_stream(selected_index)
+                self._set_status("Microphone: Connected", True)
             except Exception as e:
-                self.status_label.config(text="Error: Microphone not found", foreground="red")
+                self._set_status("Error: Microphone not found", False)
                 logger.exception(f"Failed to open microphone ({type(e).__name__}): {e}")
         else:
             MicrophoneState.SELECTED_MICROPHONE_INDEX = None
             MicrophoneState.SELECTED_MICROPHONE_NAME = None
-            self.status_label.config(text="Error: No microphone selected", foreground="red")
+            self._set_status("Error: No microphone selected", False)
 
     def reopen_stream(self):
         """
         Reopen the audio stream with the currently selected microphone.
         """
         # Stop and close the existing stream if it is open
-        if self.stream:
-            try:
-                if self.stream.is_active():
-                    self.stream.stop_stream()
-                self.stream.close()
-            except Exception as e:
-                logger.exception(f"Error closing stream: {e}")
-            finally:
-                self.stream = None
-                self.is_stream_active = False
+        self._close_stream()
 
         # Open a new stream with the selected microphone
         if MicrophoneState.SELECTED_MICROPHONE_INDEX is not None:
             try:
-                self.stream = self.p.open(
-                    format=pyaudio.paInt16,
-                    channels=1,
-                    rate=16000,
-                    input=True,
-                    frames_per_buffer=1024,
-                    input_device_index=MicrophoneState.SELECTED_MICROPHONE_INDEX
-                )
-                self.is_stream_active = True
-                self.status_label.config(text="Microphone: Connected", foreground="green")
+                self._open_stream(MicrophoneState.SELECTED_MICROPHONE_INDEX)
+                self._set_status("Microphone: Connected", True)
             except Exception as e:
-                self.status_label.config(text="Error: Microphone not found", foreground="red")
+                self._set_status("Error: Microphone not found", False)
                 logger.exception(f"Failed to open microphone ({type(e).__name__}): {e}")
 
+    # -------------------------------------------------------------------- level
     def update_volume_meter(self):
         """
-        Update the volume meter based on the current microphone input.
+        Sample the microphone and update ``level``.
+
+        Only audio that is already buffered is read, so this never blocks the
+        interface while it waits for the sound card.
         """
-        if not self.is_stream_active:
-            self.frame.after(50, self.update_volume_meter)
+        if not self.frame.winfo_exists():
+            return
+
+        if not self.is_stream_active or self.stream is None:
+            self.level = 0.0
+            self.frame.after(self.POLL_INTERVAL_MS, self.update_volume_meter)
             return
 
         try:
-            data = self.stream.read(1024, exception_on_overflow=False)
-            audio_data = np.frombuffer(data, dtype=np.int16)
-            rms = np.sqrt(np.mean(np.square(audio_data.astype(np.float64))))
-            
-            if np.isnan(rms) or rms <= 0:
-                volume = 0
-            else:
-                # Adjust the scaling factor to make the meter more sensitive
-                scaling_factor = 1000
-                volume = min(max(int((rms / 32768) * scaling_factor), 0), 100)
+            available = self.stream.get_read_available()
+            if available >= 160:  # at least 10 ms of audio
+                data = self.stream.read(min(available, self.MAX_FRAMES_PER_POLL), exception_on_overflow=False)
+                audio_data = np.frombuffer(data, dtype=np.int16)
+                rms = np.sqrt(np.mean(np.square(audio_data.astype(np.float64)))) if audio_data.size else 0.0
 
-            # Update segments
-            active_segments = int((volume / 100) * self.SEGMENT_COUNT)
-            for i, segment in enumerate(self.segments):
-                if i < active_segments:
-                    # Adjusted threshold for green
-                    if i < self.SEGMENT_COUNT * 0.4:  
-                        segment.configure(bg=self.style_colours['green'])
-                        # Adjusted threshold for yellow
-                    elif i < self.SEGMENT_COUNT * 0.7:
-                        segment.configure(bg=self.style_colours['yellow'])
-                    else:
-                        segment.configure(bg=self.style_colours['red'])
+                if np.isnan(rms) or rms <= 0:
+                    volume = 0
                 else:
-                    segment.configure(bg=self.style_colours['inactive'])
+                    # Adjust the scaling factor to make the meter more sensitive
+                    scaling_factor = 1000
+                    volume = min(max(int((rms / 32768) * scaling_factor), 0), 100)
+                self.level = volume / 100.0
 
         except OSError as e:
             # Handle both Stream closed and Unanticipated host error
             if e.errno in [-9988, -9999]:
-                self.status_label.config(text="Error: Microphone disconnected", foreground="red")
+                self._set_status("Error: Microphone disconnected", False)
             else:
                 # Handle any other stream errors
-                self.status_label.config(text="Error: Unknown Error. Check debug log for more.", foreground="red")
-            
+                self._set_status("Error: Unknown Error. Check debug log for more.", False)
+
             logger.exception(f"Error in update_volume_meter({type(e).__name__}): {e}")
             self.is_stream_active = False
             self.stream = None
-            for segment in self.segments:
-                segment.configure(bg=self.style_colours['inactive'])
+            self.level = 0.0
 
-        self.frame.after(50, self.update_volume_meter)
+        self.frame.after(self.POLL_INTERVAL_MS, self.update_volume_meter)
 
     @staticmethod
     def get_selected_microphone_index():
@@ -500,81 +319,18 @@ class MicrophoneTestFrame:
 
     def set_mic_test_state(self, enabled):
         """
-        Enable or disable the microphone test state for the UI components.
+        Allow or prevent changing the microphone.
 
-        This method updates the state of the microphone dropdown, status label, and segments 
-        based on the `enabled` parameter. If `enabled` is True, the components are set to an 
-        enabled state. If `enabled` is False, the components are disabled. For frame segments, 
-        the style is also updated to reflect the disabled state.
+        The microphone cannot be switched while a recording is in progress, so the
+        picker is disabled for that time. The level meter keeps running either way.
 
         Args:
-            enabled (bool): If True, enable the microphone test state. If False, disable it.
-
-        Notes:
-            - For macOS compatibility, we use a combination of 'state' for ttk widgets and direct
-            property changes for standard tk widgets
-            - For tk.Frame segments, we update background color and other properties directly
-            - The `_frame_original_styles` dictionary is used to store the original properties
+            enabled (bool): If True the microphone can be changed, otherwise not.
         """
-        # Handle the microphone dropdown (ttk widget)
-        if hasattr(self.mic_dropdown, 'state'):
-            self.mic_dropdown.state(['!disabled'] if enabled else ['disabled'])
-        else:
-            self.mic_dropdown.configure(state='normal' if enabled else 'disabled')
-
-        # Handle the status label
-        if hasattr(self.status_label, 'state'):
-            self.status_label.state(['!disabled'] if enabled else ['disabled'])
-        else:
-            self.status_label.configure(state='normal' if enabled else 'disabled')
-            
-        # Initialize the storage dictionary if it doesn't exist
-        if not hasattr(self, '_frame_original_styles'):
-            self._frame_original_styles = {}
-            
-        # Handle segments
-        for segment in self.segments:
-            if isinstance(segment, ttk.Frame):
-                # Handle ttk.Frame
-                if enabled:
-                    # Restore original style if it exists
-                    original_style = self._frame_original_styles.get(segment, '')
-                    segment.configure(style=original_style)
-                else:
-                    # Store original style and apply disabled style
-                    current_style = segment.cget('style')
-                    if segment not in self._frame_original_styles:
-                        self._frame_original_styles[segment] = current_style
-                    segment.configure(style='Disabled.TFrame')
-            elif isinstance(segment, tk.Frame):
-                # Handle tk.Frame differently since macOS can have issues with ttk styling
-                if enabled:
-                    # Restore original properties
-                    if segment in self._frame_original_styles:
-                        properties = self._frame_original_styles[segment]
-                        segment.configure(**properties)
-                else:
-                    # Store original properties
-                    properties = {
-                        'bg': segment.cget('bg'),
-                        'highlightbackground': segment.cget('highlightbackground') if 'highlightbackground' in segment.keys() else None,
-                        'highlightcolor': segment.cget('highlightcolor') if 'highlightcolor' in segment.keys() else None
-                    }
-                    self._frame_original_styles[segment] = {k: v for k, v in properties.items() if v is not None}
-                    
-                    # Apply disabled appearance
-                    segment.configure(bg=self.style_colours.get('inactive', '#cccccc'))
-                    if 'highlightbackground' in segment.keys():
-                        segment.configure(highlightbackground='#cccccc')
-                    if 'highlightcolor' in segment.keys():
-                        segment.configure(highlightcolor='#cccccc')
-            else:
-                # Handle other ttk widgets
-                if hasattr(segment, 'state'):
-                    segment.state(['!disabled'] if enabled else ['disabled'])
-                else:
-                    # Handle regular tk widgets
-                    segment.configure(state='normal' if enabled else 'disabled')
+        enabled = bool(enabled)
+        if enabled != self.enabled:
+            self.enabled = enabled
+            self._notify()
 
     def __del__(self):
         """

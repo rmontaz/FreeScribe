@@ -39,3 +39,6 @@ _build
 freescribe.log
 
 freescribe.log
+# Runtime data created next to the client when run from source
+note_styles.json
+ui_state.json

@@ -16,6 +16,18 @@ Please note this application is still in alpha state. Feel free to contribute, c
 > Regards,
 > Braedon Hendy
 
+## Interface
+
+![The FreeScribe workspace](docs/images/workspace.png)
+
+- **Sessions** - every visit is kept in the sidebar with its transcript, context, note and documents. Search, rename or delete them; they are stored encrypted if you turn on local storage in the settings.
+- **Start transcribing** - one button (Alt+R) records and transcribes the visit and then writes the note. Pause with Alt+P, upload an audio file instead, or resume an earlier session.
+- **Context, Transcript, Note** - add anything that was not said aloud under Context, check the transcript, and edit the note directly.
+- **Templates and documents** - SOAP, History & Physical, Progress Note, Referral Letter and a plain-language Patient Summary are built in, and you can add your own. The "+" next to the tabs creates further documents from the same session.
+- **Ask for edits** - describe a change in the bar at the bottom ("make the plan more concise") and undo it if needed.
+- **Copy and export** - copy any tab, or save it as a Word, PDF or text file.
+- **Compact recorder** - a small always-on-top bar with record, pause, timer and microphone level.
+
 ## Setup on a Local Machine
 
 To run the application on your machine just download the latest [release](https://github.com/ClinicianFOCUS/FreeScribe/releases), run the installer, and begin to use. The application is configured to run completely locally by default.
@@ -44,6 +56,9 @@ We welcome contributions to the FreeScribe project! To contribute:
 
 Please ensure your code adheres to our coding standards and includes appropriate tests.
 
+Tests run with `pytest` from the repository root. The interface tests in `tests/ui` need a display; on a headless Linux machine run them with `xvfb-run -a pytest tests/ui`.
+
 # License
 
 FreeScribes code is under the AGPL-3.0 License. See (LICENSE)[https://github.com/ClinicianFOCUS/FreeScribe/blob/main/LICENSE.txt] for further information.
+

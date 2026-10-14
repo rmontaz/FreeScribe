@@ -1,5 +1,6 @@
 import tkinter as tk
-from tkinter import Toplevel
+from tkinter import Toplevel, ttk
+from UI.Theme import Theme, Palette
 
 class PopupBox:
     """
@@ -53,32 +54,34 @@ class PopupBox:
         # Set the window title
         self.dialog.title(title)
         
+        self.dialog.configure(bg=Palette.BG)
+
         # Create and pack the message label
-        label = tk.Label(self.dialog, text=message, wraplength=250)
-        label.pack(pady=20)
+        label = tk.Label(self.dialog, text=message, wraplength=Theme.px(360), justify="left", anchor="w",
+                         bg=Palette.BG, fg=Palette.TEXT, font=Theme.font("medium"))
+        label.pack(padx=Theme.px(24), pady=(Theme.px(22), Theme.px(8)), fill="x")
 
         # Create and pack a frame to hold the buttons
-        button_frame = tk.Frame(self.dialog)
-        button_frame.pack(pady=10)
+        button_frame = tk.Frame(self.dialog, bg=Palette.BG)
+        button_frame.pack(padx=Theme.px(24), pady=(Theme.px(10), Theme.px(18)), anchor="e")
 
         # Create and pack the first button
-        button_1 = tk.Button(button_frame, text=button_text_1, command=self.on_button_1)
-        button_1.pack(side=tk.LEFT, padx=10)
+        button_1 = ttk.Button(button_frame, text=button_text_1, command=self.on_button_1)
+        button_1.pack(side=tk.LEFT, padx=(0, Theme.px(8)))
 
         # Create and pack the second button
-        button_2 = tk.Button(button_frame, text=button_text_2, command=self.on_button_2)
-        button_2.pack(side=tk.RIGHT, padx=10)
+        button_2 = ttk.Button(button_frame, text=button_text_2, command=self.on_button_2)
+        button_2.pack(side=tk.RIGHT)
 
         if button_text_3:
             # Create and pack the third button
-            button_3 = tk.Button(button_frame, text=button_text_3, command=self.on_button_3)
-            button_3.pack(side=tk.RIGHT, padx=10)
+            button_3 = ttk.Button(button_frame, text=button_text_3, command=self.on_button_3)
+            button_3.pack(side=tk.RIGHT, padx=(0, Theme.px(8)))
 
         # Update dialog to calculate required height
         self.dialog.update()
         window_height = self.dialog.winfo_reqheight()
-        #Width will be widgets plus 10 on each side for padding
-        window_width = self.dialog.winfo_reqwidth() + 20
+        window_width = self.dialog.winfo_reqwidth()
 
         # Disable window resizing
         self.dialog.resizable(False, False)

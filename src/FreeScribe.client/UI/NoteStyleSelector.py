@@ -22,6 +22,7 @@ Classes:
 """
 import tkinter as tk
 import UI.Helpers
+from UI.Theme import Theme, Palette
 from tkinter import ttk, simpledialog, messagebox
 from dataclasses import dataclass
 import json
@@ -58,10 +59,13 @@ class NoteStyleSelector(tk.Frame):
         _styles_file (str): Path to the JSON file storing style data.
     """
     # Static class variables
-    current_style = "SOAP Note - Default"
+    DEFAULT_STYLE = "SOAP Note - Default"
+    ADD_OPTION = "Add Prompt Template..."
+    NO_NOTE_STYLE = "No Note Generation"
+    current_style = DEFAULT_STYLE
     # Store style data with pre/post prompts
     style_data = {}
-    style_options = ["Add Prompt Template...", "No Note Generation", "SOAP Note - Default"]
+    style_options = [ADD_OPTION, DEFAULT_STYLE]
     _styles_file = "note_styles.json"
     _styles_path = get_resource_path(_styles_file)
     
@@ -84,6 +88,127 @@ class NoteStyleSelector(tk.Frame):
                 "post_prompt": "Remember, the Subjective section should reflect the patient's perspective and complaints as mentioned in the conversation. The Objective section should only include observable or measurable data from the conversation. The Assessment should be a summary of your understanding and potential diagnoses, considering the conversation's content. The Plan should outline the proposed management, strictly based on the dialogue provided. Do not add any information that did not occur and do not make assumptions. Strictly extract facts from the conversation."
             }
         }
+
+    @classmethod
+    def _get_builtin_styles(cls):
+        """
+        Returns every template that ships with the application.
+
+        The default SOAP note comes first, followed by the other built-in
+        templates. Built-in templates can be viewed but not edited or deleted;
+        users who want a variation can add their own template.
+
+        Returns:
+            dict: Mapping of template name to its pre_prompt / post_prompt.
+        """
+        strict = ("Do not add any information that did not occur and do not make assumptions. "
+                  "Strictly extract facts from the conversation.")
+        defaults = cls._get_default_styles()
+        # "No Note Generation" only records and transcribes, so it is listed after the note templates
+        styles = {name: prompts for name, prompts in defaults.items() if name != cls.NO_NOTE_STYLE}
+        styles.update({
+            "History & Physical": {
+                "pre_prompt": "AI, please transform the following conversation into a History and Physical (H&P) note. Use these headings in this order: Chief Complaint, History of Present Illness, Past Medical History, Medications, Allergies, Family History, Social History, Review of Systems, Physical Examination, Assessment, Plan. Do not assume any medical data, vital signs, or lab values. Base the note strictly on the information provided in the conversation. Here's the conversation:",
+                "post_prompt": "Remember, every statement must come from the conversation. If a section was not discussed, write 'Not discussed' under that heading instead of inferring content. The Physical Examination should only include findings that were stated aloud. " + strict,
+            },
+            "Progress Note": {
+                "pre_prompt": "AI, please transform the following conversation into a concise follow-up progress note. Use these headings in this order: Reason for Visit, Interval History, Medications, Examination, Assessment, Plan, Follow-up. Do not assume any medical data, vital signs, or lab values. Base the note strictly on the information provided in the conversation. Here's the conversation:",
+                "post_prompt": "Remember, the Interval History should describe what has changed since the last visit as reported in the conversation. Leave out any heading that was not discussed rather than inventing content. " + strict,
+            },
+            "Referral Letter": {
+                "pre_prompt": "AI, please write a referral letter to another clinician based on the following conversation. Begin with 'Dear Colleague,' and write in clear professional prose with short paragraphs covering: the reason for referral, the relevant history, examination findings, investigations and treatment so far, current medications, and the specific question or request for the receiving clinician. Do not assume any medical data, vital signs, or lab values. Base the letter strictly on the information provided in the conversation. Here's the conversation:",
+                "post_prompt": "Remember, use square-bracket placeholders such as [Patient name], [Recipient] or [Referring clinician] for any detail that was not stated in the conversation, and end with 'Kind regards,' followed by a blank signature line. " + strict,
+            },
+            "Patient Summary (Plain Language)": {
+                "pre_prompt": "AI, please write an after-visit summary for the patient based on the following conversation. Write directly to the patient ('you') in plain, friendly language that someone without medical training can understand, avoiding jargon and abbreviations. Use these headings in this order: What we talked about, What we found, Your plan, Your medicines, When to get help sooner, Follow-up. Base the summary strictly on the information provided in the conversation. Here's the conversation:",
+                "post_prompt": "Remember, only include advice, medicines, tests and warning signs that were actually mentioned in the conversation, and leave out any heading that was not discussed. Do not add new medical advice. " + strict,
+            },
+        })
+        if cls.NO_NOTE_STYLE in defaults:
+            styles[cls.NO_NOTE_STYLE] = defaults[cls.NO_NOTE_STYLE]
+        return styles
+
+    @classmethod
+    def is_protected(cls, style_name):
+        """
+        Whether a template is built in (viewable, but not editable or deletable).
+
+        A template only counts as built in while its prompts still match the
+        shipped ones, so a user's own template that happens to share a name is
+        left fully under their control.
+
+        Args:
+            style_name (str): The template name to check.
+
+        Returns:
+            bool: True if the template is a built-in one.
+        """
+        builtin = cls._get_builtin_styles().get(style_name)
+        if builtin is None:
+            return False
+        return cls.style_data.get(style_name, builtin) == builtin
+
+    @classmethod
+    def template_names(cls):
+        """
+        Returns the selectable template names (without the "Add..." entry).
+
+        Returns:
+            list: Template names in display order.
+        """
+        cls.ensure_loaded()
+        return [name for name in cls.style_options if name != cls.ADD_OPTION]
+
+    @classmethod
+    def ensure_loaded(cls):
+        """Loads the templates from disk the first time they are needed."""
+        if not getattr(cls, '_styles_loaded', False):
+            cls.load_styles()
+            cls._styles_loaded = True
+
+    @classmethod
+    def select_style(cls, style_name):
+        """
+        Makes ``style_name`` the current template and remembers the choice.
+
+        Args:
+            style_name (str): The template to select.
+
+        Returns:
+            bool: True if the template exists and was selected.
+        """
+        cls.ensure_loaded()
+        if style_name not in cls.style_data:
+            return False
+        cls.current_style = style_name
+        cls.save_styles()
+        return True
+
+    @classmethod
+    def get_prompt_info(cls, style_name):
+        """
+        Gets the prompt information for a named template.
+
+        Args:
+            style_name (str): The template name.
+
+        Returns:
+            StylePromptInfo: The template's prompts (empty if it does not exist).
+        """
+        cls.ensure_loaded()
+        data = cls.style_data.get(style_name, {})
+        return StylePromptInfo(
+            style_name=style_name,
+            pre_prompt=data.get('pre_prompt', ''),
+            post_prompt=data.get('post_prompt', '')
+        )
+
+    @classmethod
+    def _rebuild_options(cls):
+        """Rebuilds the ordered option list: add entry, built-ins, then custom templates."""
+        builtin_names = [name for name in cls._get_builtin_styles() if name in cls.style_data]
+        custom = [name for name in cls.style_data if name not in builtin_names]
+        cls.style_options = [cls.ADD_OPTION] + builtin_names + custom
     
     @classmethod
     def load_styles(cls):
@@ -105,25 +230,32 @@ class NoteStyleSelector(tk.Frame):
                 with open(cls._styles_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                     cls.style_data = data.get('styles', {})
-                    cls.current_style = data.get('current_style', "SOAP Note - Default")
+                    cls.current_style = data.get('current_style', cls.DEFAULT_STYLE)
             else:
                 # Create default styles
-                cls.style_data = cls._get_default_styles()
-                cls.current_style = "SOAP Note - Default"
+                cls.style_data = {}
+                cls.current_style = cls.DEFAULT_STYLE
+
+            # Make sure every built-in template is available. Templates the user
+            # already has under the same name are left untouched.
+            added = False
+            for name, prompts in cls._get_builtin_styles().items():
+                if name not in cls.style_data:
+                    cls.style_data[name] = dict(prompts)
+                    added = True
+            if cls.current_style not in cls.style_data:
+                cls.current_style = cls.DEFAULT_STYLE
+            if added:
                 cls.save_styles()
-            
-            # Update style_options list - only add custom styles that aren't already in the list
-            custom_styles = [style for style in cls.style_data.keys() if style not in cls.style_options]
-            cls.style_options = ["Add Prompt Template...", "No Note Generation", "SOAP Note - Default"] + custom_styles
+
+            cls._rebuild_options()
 
         except Exception as e:
             logger.exception(f"Error loading styles: {e}")
             # Fallback to defaults
-            cls.style_data = cls._get_default_styles()
-            cls.current_style = "SOAP Note - Default"
-            # Only add custom styles that aren't already in the list
-            custom_styles = [style for style in cls.style_data.keys() if style not in cls.style_options]
-            cls.style_options = ["Add Prompt Template...", "No Note Generation", "SOAP Note - Default"] + custom_styles
+            cls.style_data = {name: dict(prompts) for name, prompts in cls._get_builtin_styles().items()}
+            cls.current_style = cls.DEFAULT_STYLE
+            cls._rebuild_options()
 
     @classmethod
     def save_styles(cls):
@@ -164,9 +296,7 @@ class NoteStyleSelector(tk.Frame):
             None
         """
         # Load styles before initializing
-        if not hasattr(NoteStyleSelector, '_styles_loaded'):
-            NoteStyleSelector.load_styles()
-            NoteStyleSelector._styles_loaded = True
+        NoteStyleSelector.ensure_loaded()
             
         super().__init__(parent_frame, bg=parent_frame.cget("bg"))
         self.root = root
@@ -308,8 +438,8 @@ class NoteStyleSelector(tk.Frame):
         # Get existing data if available
         existing_data = NoteStyleSelector.style_data.get(current_style, {'pre_prompt': '', 'post_prompt': ''})
         
-        # Check if it's a protected style - allow viewing but not editing
-        is_protected = (current_style in ["SOAP Note - Default", "No Note Generation"])
+        # Built-in templates can be viewed but not edited
+        is_protected = NoteStyleSelector.is_protected(current_style)
 
         dialog = StyleDialog(self.root, "View Template" if is_protected else "Edit Template",
                            initial_name=current_style,
@@ -360,8 +490,8 @@ class NoteStyleSelector(tk.Frame):
             None
         """
         current_style = self.style_var.get()
-        if current_style in ["Add Prompt Template...", "No Note Generation", "SOAP Note - Default"]:
-            messagebox.showwarning("Delete Template", "Cannot delete 'Add Prompt Template...', 'No Note Generation', or 'SOAP Note - Default' template.")
+        if current_style == "Add Prompt Template..." or NoteStyleSelector.is_protected(current_style):
+            messagebox.showwarning("Delete Template", "Built-in templates cannot be deleted.")
             return
 
         if messagebox.askyesno("Delete Template", f"Are you sure you want to delete '{current_style}'?"):
@@ -463,23 +593,27 @@ class StyleDialog:
         # Center the dialog
         self.dialog.geometry("+%d+%d" % (parent.winfo_rootx() + 50, parent.winfo_rooty() + 50))
              
+        self.dialog.configure(bg=Palette.BG)
+        heading_font = Theme.font("base", "semibold")
+        side_pad = Theme.px(20)
+
         # Style name
-        self.name_label = tk.Label(self.dialog, text="Template Name:")
-        self.name_label.pack(pady=5)
-        self.name_entry = tk.Entry(self.dialog, width=50, font=('Arial', 10))
-        self.name_entry.pack(pady=5)
+        self.name_label = tk.Label(self.dialog, text="Template Name:", font=heading_font, anchor="w")
+        self.name_label.pack(pady=(Theme.px(16), 4), padx=side_pad, fill=tk.X)
+        self.name_entry = tk.Entry(self.dialog, width=50)
+        self.name_entry.pack(pady=(0, 5), padx=side_pad, anchor="w")
         self.name_entry.insert(0, initial_name)
         if self.read_only:
             self.name_entry.configure(state='disabled')
         
         # Pre prompt section with explanation
-        tk.Label(self.dialog, text="Pre Prompt:").pack(pady=(15, 5))
+        tk.Label(self.dialog, text="Pre Prompt:", font=heading_font, anchor="w").pack(pady=(12, 4), padx=side_pad, fill=tk.X)
         
         pre_frame = tk.Frame(self.dialog)
         pre_frame.pack(pady=5, padx=20, fill=tk.BOTH, expand=True)
         
         # Pre prompt text box
-        self.pre_text = tk.Text(pre_frame, height=8, width=50, font=('Arial', 9))
+        self.pre_text = tk.Text(pre_frame, height=8, width=50, wrap="word", font=Theme.font("base"))
         self.pre_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.pre_text.insert(tk.END, initial_pre)
         if self.read_only:
@@ -490,25 +624,25 @@ class StyleDialog:
             "This is the FIRST part of the AI prompt structure:\n\n"
             "• Acts as the opening instruction to the AI\n"
             "• Sets up how to interpret the conversation\n"
-            "• Defines SOAP note format requirements\n"
+            "• Defines the document format (e.g. SOAP sections)\n"
             "• Conversation will be inserted after this\n\n"
-            "⚠️ Modify with caution as it affects AI output quality"
+            "Modify with caution as it affects AI output quality"
         )
         
         pre_explanation_label = tk.Label(pre_frame, text=pre_explanation, 
                                        justify=tk.LEFT, anchor='nw', 
-                                       font=('Arial', 8), fg='gray',
-                                       wraplength=215, width=35)
+                                       font=Theme.font("small"), fg=Palette.TEXT_MUTED,
+                                       wraplength=Theme.px(215), width=35)
         pre_explanation_label.pack(side=tk.RIGHT, padx=(10, 0), fill=tk.Y)
         
         # Post prompt section with explanation
-        tk.Label(self.dialog, text="Post Prompt:").pack(pady=(15, 5))
+        tk.Label(self.dialog, text="Post Prompt:", font=heading_font, anchor="w").pack(pady=(12, 4), padx=side_pad, fill=tk.X)
         
         post_frame = tk.Frame(self.dialog)
         post_frame.pack(pady=5, padx=20, fill=tk.BOTH, expand=True)
         
         # Post prompt text box
-        self.post_text = tk.Text(post_frame, height=8, width=50, font=('Arial', 9))
+        self.post_text = tk.Text(post_frame, height=8, width=50, wrap="word", font=Theme.font("base"))
         self.post_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.post_text.insert(tk.END, initial_post)
         if self.read_only:
@@ -519,37 +653,34 @@ class StyleDialog:
             "This is the LAST part of the AI prompt structure:\n\n"
             "• Added after the conversation text\n"
             "• Provides final formatting instructions\n"
-            "• Ensures SOAP note completeness\n"
+            "• Reinforces completeness and accuracy rules\n"
             "• Helps maintain consistency\n\n"
-            "⚠️ Modify with caution as it affects AI output quality"
+            "Modify with caution as it affects AI output quality"
         )
         
         post_explanation_label = tk.Label(post_frame, text=post_explanation, 
                                         justify=tk.LEFT, anchor='nw', 
-                                        font=('Arial', 8), fg='gray',
-                                        wraplength=215, width=35)
+                                        font=Theme.font("small"), fg=Palette.TEXT_MUTED,
+                                        wraplength=Theme.px(215), width=35)
         post_explanation_label.pack(side=tk.RIGHT, padx=(10, 0), fill=tk.Y)
         
         # Buttons
         button_frame = tk.Frame(self.dialog)
-        button_frame.pack(pady=20, fill=tk.X)
+        button_frame.pack(pady=(14, 16), padx=side_pad, fill=tk.X)
         
-        # Center the buttons
+        # Buttons sit at the right, primary action last
         inner_frame = tk.Frame(button_frame)
-        inner_frame.pack()
+        inner_frame.pack(side=tk.RIGHT)
         
-        # Only show OK button if not read-only, or disable it if read-only
+        # A read-only template can only be closed
         if self.read_only:
-            ok_button = tk.Button(inner_frame, text="OK", command=lambda: self.ok_clicked(is_edit=is_edit), 
-                                width=10, font=('Arial', 10), state='disabled')
-            ok_button.pack(side=tk.LEFT, padx=10)
-            tk.Button(inner_frame, text="Close", command=self.cancel_clicked, 
-                     width=10, font=('Arial', 10)).pack(side=tk.LEFT, padx=10)
+            ttk.Button(inner_frame, text="Close", command=self.cancel_clicked, 
+                     width=10).pack(side=tk.LEFT)
         else:
-            tk.Button(inner_frame, text="OK", command=lambda: self.ok_clicked(is_edit=is_edit), 
-                     width=10, font=('Arial', 10)).pack(side=tk.LEFT, padx=10)
-            tk.Button(inner_frame, text="Cancel", command=self.cancel_clicked, 
-                     width=10, font=('Arial', 10)).pack(side=tk.LEFT, padx=10)
+            ttk.Button(inner_frame, text="Cancel", command=self.cancel_clicked, 
+                     width=10).pack(side=tk.LEFT, padx=(0, 8))
+            ttk.Button(inner_frame, text="OK", command=lambda: self.ok_clicked(is_edit=is_edit), 
+                     width=10, style="Accent.TButton").pack(side=tk.LEFT)
         
         # Focus on name entry (if not disabled)
         if not self.read_only:
@@ -561,7 +692,7 @@ class StyleDialog:
 
         # Add warning for read-only mode
         if self.read_only:
-            self.show_error_warning("⚠️ Cannot edit default note template - View only mode")
+            self.show_error_warning("Built-in templates are view-only. Add your own template to customise the wording.")
 
         # Wait for dialog to close
         self.dialog.wait_window()
@@ -578,12 +709,13 @@ class StyleDialog:
             self.warning_frame.destroy()
         
         # Create new warning frame
-        self.warning_frame = tk.Frame(self.dialog, bg='#ffeeee', relief='raised', bd=2)
-        self.warning_frame.pack(fill=tk.X, padx=10, pady=5, before=self.name_label)
+        self.warning_frame = tk.Frame(self.dialog, bg=Palette.DANGER_SOFT)
+        self.warning_frame.pack(fill=tk.X, before=self.name_label)
         warning_label = tk.Label(self.warning_frame, 
                                text=message,
-                               bg='#ffeeee', fg='#cc0000', font=('Arial', 10, 'bold'))
-        warning_label.pack(pady=5)
+                               bg=Palette.DANGER_SOFT, fg=Palette.DANGER, font=Theme.font("base", "medium"),
+                               wraplength=Theme.px(820), justify=tk.LEFT)
+        warning_label.pack(pady=8, padx=Theme.px(20), anchor="w")
     
     def hide_error_warning(self):
         """
@@ -615,12 +747,12 @@ class StyleDialog:
         post_prompt = self.post_text.get("1.0", tk.END).strip()
         
         if not name:
-            self.show_error_warning("⚠️ Template name cannot be empty - Please enter a title")
+            self.show_error_warning("Template name cannot be empty - Please enter a title")
             self.name_entry.focus_set()
             return
         else:
             if not is_edit and name in NoteStyleSelector.style_options:
-                self.show_error_warning(f"⚠️ Template '{name}' already exists - Please choose a different name")
+                self.show_error_warning(f"Template '{name}' already exists - Please choose a different name")
                 return
     
         # Hide any existing warning if validation passes

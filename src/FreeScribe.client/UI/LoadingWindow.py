@@ -1,9 +1,8 @@
 import tkinter as tk
 from tkinter import ttk
-from utils.file_utils import get_file_path
 from utils.log_config import logger
-import utils.system
 import UI.Helpers
+from UI.Theme import Theme, Palette
 import time
 import threading
 
@@ -84,16 +83,46 @@ class LoadingWindow:
             logger.debug("Building LoadingWindow UI")
             self.popup = tk.Toplevel(self.parent)
             self.popup.title(self.title)
-            # Adjust geometry based on whether note_text is provided
+            self.popup.configure(bg=Palette.BG)
+            # Works on every platform (a bare .ico is not accepted on Linux)
+            UI.Helpers.set_window_icon(self.popup)
+
+            body = tk.Frame(self.popup, bg=Palette.BG)
+            body.pack(fill="both", expand=True, padx=Theme.px(24), pady=(Theme.px(20), Theme.px(16)))
+
+            # Use label and progress bar
+            self.label = tk.Label(body, text=self.initial_text, bg=Palette.BG, fg=Palette.TEXT,
+                                  font=Theme.font("medium", "semibold"), justify="left", anchor="w",
+                                  wraplength=Theme.px(320))
+            self.label.pack(fill="x")
+            self.progress = ttk.Progressbar(body, mode='indeterminate', length=Theme.px(320))
+            self.progress.pack(pady=(Theme.px(12), Theme.px(4)), fill='x')
+            self.progress.start()
+
+            # Add note text if provided
             if self.note_text:
-                self.popup.geometry("360x180")  # Increased height for note text
-            else:
-                self.popup.geometry("280x105")  # Default height
-            self.popup.iconbitmap(get_file_path('assets','logo.ico'))
+                self.note_label = tk.Label(
+                    body,
+                    text=self.note_text,
+                    wraplength=Theme.px(320),
+                    justify="left",
+                    anchor="w",
+                    font=Theme.font("small"),
+                    bg=Palette.BG,
+                    fg=Palette.TEXT_MUTED,
+                )
+                self.note_label.pack(fill="x", pady=(Theme.px(6), 0))
+
+            # Add cancel button
+            self.cancel_button = ttk.Button(
+                body, text="Cancel", command=self._handle_cancel
+            )
+            self.cancel_button.pack(anchor="e", pady=(Theme.px(14), 0))
 
             if self.parent:
                 # Center the popup window on the parent window
                 self.parent.update_idletasks()
+                self.popup.update_idletasks()
                 x = (
                     self.parent.winfo_x()
                     + (self.parent.winfo_width() - self.popup.winfo_reqwidth()) // 2
@@ -102,37 +131,11 @@ class LoadingWindow:
                     self.parent.winfo_y()
                     + (self.parent.winfo_height() - self.popup.winfo_reqheight()) // 2
                 )
-                self.popup.geometry(f"+{x}+{y}")
+                self.popup.geometry(f"+{max(0, x)}+{max(0, y)}")
                 self.popup.transient(self.parent)
                 
                 # Disable the parent window
                 UI.Helpers.disable_parent_window(self.parent, self.popup)
-
-            # Use label and progress bar
-            self.label = tk.Label(self.popup, text=self.initial_text)
-            self.label.pack(pady=(10,5))
-            self.progress = ttk.Progressbar(self.popup, mode='indeterminate')
-            self.progress.pack(padx=20, pady=(0,10), fill='x')
-            self.progress.start()
-
-            # Add note text if provided
-            if self.note_text:
-                font_size = 11 if utils.system.is_macos() else 9
-                self.note_label = tk.Label(
-                    self.popup,
-                    text=self.note_text,
-                    wraplength=350,
-                    justify="center",
-                    font=("TkDefaultFont", font_size),
-                    fg="#262525",
-                )
-                self.note_label.pack(pady=(0, 10))
-
-            # Add cancel button
-            self.cancel_button = ttk.Button(
-                self.popup, text="Cancel", command=self._handle_cancel
-            )
-            self.cancel_button.pack(pady=(7, 5))
 
             # Not Resizable
             self.popup.resizable(False, False)
