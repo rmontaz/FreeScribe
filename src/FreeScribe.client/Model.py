@@ -10,6 +10,7 @@ from enum import Enum
 import torch
 import utils.system
 from utils.file_utils import get_resource_path, is_flatpak
+from utils.model_path import local_model_path
 
 
 
@@ -226,10 +227,11 @@ class ModelManager:
             if torch.backends.mps.is_available():
                 gpu_layers = -1
 
-            model_path = app_settings.editable_settings[SettingsKeys.LOCAL_LLM_MODEL.value]
-
-            if (utils.system.is_macos() or is_flatpak()) and not os.path.isabs(model_path):
-                model_path = get_resource_path(filename=f"{model_path}", shared=True)
+            setting = app_settings.editable_settings[SettingsKeys.LOCAL_LLM_MODEL.value]
+            model_path, used_fallback = local_model_path(setting)
+            if used_fallback:
+                logger.warning(f"The AI Model setting ({setting!r}) is not a model file; "
+                               f"loading the bundled model from {model_path}")
 
             try:
                 context_size = app_settings.editable_settings.get(
