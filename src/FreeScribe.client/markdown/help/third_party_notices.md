@@ -2,7 +2,7 @@
 
 FreeScribe is released under the GNU Affero General Public License v3.0 (see LICENSE.txt). It is built on open-source libraries, each under its own licence; the full list of dependencies is in the `client_requirements*.txt` files of the [FreeScribe source code](https://github.com/ClinicianFOCUS/FreeScribe).
 
-This page lists the libraries used by PDF form filling, and the notices their licences ask to be reproduced.
+This page lists the libraries used by PDF form filling, the data used for medical vocabulary, and the notices their licences ask to be reproduced.
 
 ## pypdf
 
@@ -40,6 +40,17 @@ The mapper uses these libraries, kept in `assets/eform_mapper/vendor/` with thei
 * **PDF.js** 3.11.174, Copyright (c) Mozilla Foundation and contributors, Apache License 2.0 (`vendor/LICENSE-pdfjs.txt`)
 * **PDF.js standard fonts** from pdfjs-dist 3.11.174, used to draw symbol-font characters such as tick boxes: Foxit fonts, Copyright 2014 PDFium Authors, BSD 3-Clause License (`vendor/standard_fonts/LICENSE_FOXIT`); Liberation Sans, Copyright (c) 2010 Google Corporation and (c) 2012 Red Hat, Inc., SIL Open Font License 1.1 (`vendor/standard_fonts/LICENSE_LIBERATION`)
 * **JSZip** 3.10.1, Copyright (c) 2009-2016 Stuart Knightley, David Duponchel, Franz Buchinger, António Afonso, dual-licensed MIT or GPL-3.0 and used under the MIT License (`vendor/LICENSE-jszip.md`)
+
+## Drug names (medical vocabulary and drug-name check)
+
+FreeScribe lists drug names in `assets/medical/drug_names.txt`. It uses them to help speech-to-text hear drug names and to underline words that look like a misheard drug name. The list is built from two public sources:
+
+* **Health Canada Drug Product Database** (human products: active ingredient names). Contains information licensed under the [Open Government Licence – Canada](https://open.canada.ca/en/open-government-licence-canada). Source: [Drug Product Database data extract](https://www.canada.ca/en/health-canada/services/drugs-health-products/drug-products/drug-product-database/what-data-extract-drug-product-database.html).
+* **RxNorm Current Prescribable Content** (ingredient and brand names), from the U.S. National Library of Medicine, which provides this subset without licensing restrictions. This product uses publicly available data from the U.S. National Library of Medicine (NLM), National Institutes of Health, Department of Health and Human Services; NLM is not responsible for the product and does not endorse or recommend this or any other product. Source: [RxNorm files](https://www.nlm.nih.gov/research/umls/rxnorm/docs/rxnormfiles.html).
+
+The drug-name check leaves alone ordinary English words that look like drug names. That list (`assets/medical/common_lookalikes.txt`) was made with the public-domain word list from Webster's Second International Dictionary (1934).
+
+Neither source is used to give medical advice; the list is only a spelling aid, and every suggestion is for the clinician to accept or ignore.
 
 ## Development tools
 

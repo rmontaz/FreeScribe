@@ -36,6 +36,8 @@ class SettingsKeys(Enum):
     FACTUAL_CONSISTENCY_VERIFICATION = "Factual Consistency Verification (Experimental)"
     GOOGLE_MAPS_API_KEY = "Google Maps API Key"
     TRANSCRIBE_ONLY_MODE = "Transcribe Only Mode"
+    MEDICAL_VOCABULARY = "Medical Vocabulary"
+    DRUG_NAME_CHECK = "Check Drug Names"
 
 class Architectures(Enum):
     CPU = ("CPU", "cpu")

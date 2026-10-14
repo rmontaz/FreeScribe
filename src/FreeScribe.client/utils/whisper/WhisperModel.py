@@ -256,26 +256,37 @@ def unload_stt_model(event=None):
         print("STT model is already unloaded.")
 
 
-def faster_whisper_transcribe(audio, app_settings):
+def faster_whisper_transcribe(audio, app_settings, language=None, prompt=None, info=None):
     """
     Transcribe audio using the Faster Whisper model.
 
     Args:
         audio: Audio data to transcribe.
+        language: language code to use ("en", "fr" ...); None lets Whisper detect it
+        prompt: text Whisper reads first (vocabulary such as drug names)
+        info: optional dict that receives ``language``, ``language_probability`` and ``seconds``
 
     Returns:
         str: Transcribed text or error message if transcription fails.
     """
     if utils.system.is_windows() or utils.system.is_linux():
-        return _faster_whisper_transcribe_windows(audio, app_settings)
+        return _faster_whisper_transcribe_windows(audio, app_settings, language, prompt, info)
     elif utils.system.is_macos():
-        return _faster_whisper_transcribe_macos(audio, app_settings)
+        return _faster_whisper_transcribe_macos(audio, app_settings, language, prompt, info)
     else:
         raise NotImplementedError(f"Unsupported platform: {platform.system()}")
 
 
+def is_english_only_model(app_settings):
+    """English-only Whisper models (".en") take no language setting."""
+    try:
+        return str(get_model_from_settings(app_settings)).lower().endswith(".en")
+    except Exception:
+        return False
+
+
 @utils.decorators.macos_only
-def _faster_whisper_transcribe_macos(audio, app_settings):
+def _faster_whisper_transcribe_macos(audio, app_settings, language=None, prompt=None, info=None):
     """
     Transcribe audio using the Faster Whisper model.
 
@@ -290,12 +301,34 @@ def _faster_whisper_transcribe_macos(audio, app_settings):
 
     # passing arguments to translate
     generate_kwargs = {}
-    if app_settings.editable_settings[SettingsKeys.USE_TRANSLATE_TASK.value]:
+    english_only = is_english_only_model(app_settings)
+    if app_settings.editable_settings[SettingsKeys.USE_TRANSLATE_TASK.value] and not english_only:
         generate_kwargs['task'] = 'translate'
+    if language and not english_only:
+        generate_kwargs['language'] = language
+    if prompt:
+        try:
+            generate_kwargs['prompt_ids'] = stt_local_model.tokenizer.get_prompt_ids(prompt, return_tensors="pt").to(
+                stt_local_model.device)
+        except Exception as e:  # an older transformers without prompts: carry on without one
+            logger.warning(f"Whisper prompt not used: {e}")
 
     # Transcription
-    result = stt_local_model(cleaned_audio, generate_kwargs=generate_kwargs)
-    return result["text"]
+    try:
+        result = stt_local_model(cleaned_audio, generate_kwargs=generate_kwargs)
+    except Exception as e:
+        if 'prompt_ids' not in generate_kwargs:
+            raise
+        logger.warning(f"Transcribing again without the vocabulary prompt: {e}")
+        generate_kwargs.pop('prompt_ids')
+        result = stt_local_model(cleaned_audio, generate_kwargs=generate_kwargs)
+    text = result["text"]
+    # Some versions return the prompt in front of the transcript
+    if prompt and text.strip().startswith(prompt.strip()):
+        text = text.strip()[len(prompt.strip()):]
+    if info is not None:
+        info["seconds"] = float(np.asarray(cleaned_audio).shape[0]) / SAMPLE_RATE
+    return text
 
 
 def _remove_silent_chunks(audio: np.ndarray):
@@ -342,7 +375,7 @@ def _remove_silent_chunks(audio: np.ndarray):
 
 
 @utils.decorators.os_only(WINDOWS_LINUX)
-def _faster_whisper_transcribe_windows(audio, app_settings):
+def _faster_whisper_transcribe_windows(audio, app_settings, language=None, prompt=None, info=None):
     """
     Transcribe audio using the Faster Whisper model.
 
@@ -377,11 +410,23 @@ def _faster_whisper_transcribe_windows(audio, app_settings):
             app_settings.editable_settings[SettingsKeys.WHISPER_VAD_FILTER.value]
         )
 
-        segments, info = stt_local_model.transcribe(
+        english_only = is_english_only_model(app_settings)
+        if language and not english_only:
+            additional_kwargs["language"] = language
+        if prompt:
+            additional_kwargs["initial_prompt"] = prompt
+
+        segments, result_info = stt_local_model.transcribe(
             audio, beam_size=beam_size, vad_filter=vad_filter, **additional_kwargs
         )
 
-        return "".join(f"{segment.text} " for segment in segments)
+        text = "".join(f"{segment.text} " for segment in segments)
+        if info is not None:
+            info["language"] = getattr(result_info, "language", None)
+            info["language_probability"] = float(getattr(result_info, "language_probability", 0.0) or 0.0)
+            info["seconds"] = float(getattr(result_info, "duration_after_vad", None)
+                                    or getattr(result_info, "duration", 0.0) or 0.0)
+        return text
     except Exception as e:
         error_message = f"Transcription failed: {str(e)}"
         print(f"Error during transcription: {str(e)}")

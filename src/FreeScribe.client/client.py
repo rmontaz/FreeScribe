@@ -75,11 +75,14 @@ from utils.network.openai_client import OpenAIClient
 from urllib.parse import urlparse
 from UI.Theme import Theme
 from UI.Workspace import Workspace
-from services.sessions import SessionStore, DETAIL_LEVELS, DEFAULT_DETAIL_LEVEL, compose_source, compose_revision_prompt
+from services.sessions import (SessionStore, DETAIL_LEVELS, DEFAULT_DETAIL_LEVEL, SPEAKER_INSTRUCTION, compose_source,
+                               compose_revision_prompt)
 from services import form_filler
 from UI.FormFillWindow import FormFillWindow
 from services.chat import compose_chat_prompt, form_event_text
 from services.dictation import Dictation, to_wav_bytes
+from services.medical_vocab import (DrugLexicon, VisitLanguage, build_speech_prompt, is_prompt_echo,
+                                    split_terms)
 from utils.ui_state import UIState
 
 # parse command line arguments
@@ -415,6 +418,67 @@ def track_thread(thread):
     """Remembers ``thread`` so kill_thread() can tell if it has already finished. Returns its ID."""
     tracked_threads[thread.ident] = thread
     return thread.ident
+
+
+# ---------------------------------------------------------------- speech vocabulary
+visit_language = VisitLanguage()      # the language kept for the visit being transcribed (Auto-detect)
+_drug_lexicon = None
+
+
+def get_drug_lexicon():
+    """Drug names from Health Canada's Drug Product Database and RxNorm (loaded once)."""
+    global _drug_lexicon
+    if _drug_lexicon is None:
+        try:
+            _drug_lexicon = DrugLexicon.load(get_file_path('assets', 'medical', 'drug_names.txt'),
+                                             get_file_path('assets', 'medical', 'common_lookalikes.txt'))
+        except Exception as e:
+            logger.exception(f"Drug names could not be loaded: {e}")
+            _drug_lexicon = DrugLexicon()
+    return _drug_lexicon
+
+
+def find_drug_flags(text):
+    """Words in ``text`` that look like a misheard drug name, when the check is on."""
+    if not app_settings.editable_settings.get(SettingsKeys.DRUG_NAME_CHECK.value, True):
+        return []
+    try:
+        return get_drug_lexicon().flags(text)
+    except Exception as e:
+        logger.exception(f"Drug-name check failed: {e}")
+        return []
+
+
+def speech_options():
+    """(language, prompt) for the speech-to-text model during the current visit."""
+    settings = app_settings.editable_settings
+    code = str(settings.get(SettingsKeys.WHISPER_LANGUAGE_CODE.value, "")).strip()
+    language = None if code in SettingsWindow.AUTO_DETECT_LANGUAGE_CODES else code
+    if language is None:
+        language = visit_language.language
+    own = split_terms(str(settings.get(SettingsKeys.MEDICAL_VOCABULARY.value, "") or ""))
+    legacy = str(settings.get(SettingsKeys.WHISPER_INITIAL_PROMPT.value, "") or "").strip()
+    if legacy and legacy not in SettingsWindow.AUTO_DETECT_LANGUAGE_CODES:
+        own = [legacy] + own
+    session = workspace.current if 'workspace' in globals() else None
+    context = session.context if session is not None else ""
+    prompt = build_speech_prompt(context, own, get_drug_lexicon())
+    return language, prompt
+
+
+def transcribe_local(audio):
+    """Local Whisper with the visit's language and vocabulary; keeps the language once it is clear."""
+    language, prompt = speech_options()
+    info = {}
+    text = faster_whisper_transcribe(audio, app_settings=app_settings, language=language, prompt=prompt, info=info)
+    if language is None and info.get("language"):
+        if visit_language.observe(info["language"], info.get("language_probability", 0.0), info.get("seconds", 0.0)):
+            logger.info(f"Transcription language kept for this visit: {visit_language.language}")
+            run_on_ui(workspace._refresh_meta)
+    if is_prompt_echo(text, prompt):
+        logger.info("Dropped a piece of transcript that only repeated the vocabulary prompt")
+        return ""
+    return text
 
 
 def get_prompt(formatted_message):
@@ -780,7 +844,7 @@ def realtime_text():
                         break
                     result = None
                     try:
-                        result = faster_whisper_transcribe(audio_buffer, app_settings=app_settings)
+                        result = transcribe_local(audio_buffer)
                         if app_settings.editable_settings[SettingsKeys.ENABLE_HALLUCINATION_CLEAN.value] and FeatureToggle.HALLUCINATION_CLEANING:
                             result = hallucination_cleaner.clean_text(result)
                     except Exception as e:
@@ -811,11 +875,10 @@ def realtime_text():
                         "use_translate": app_settings.editable_settings[SettingsKeys.USE_TRANSLATE_TASK.value],
                     }
 
-                    if app_settings.editable_settings[SettingsKeys.WHISPER_LANGUAGE_CODE.value] not in SettingsWindow.AUTO_DETECT_LANGUAGE_CODES:
-                        body["language_code"] = app_settings.editable_settings[SettingsKeys.WHISPER_LANGUAGE_CODE.value]
-
-                    if app_settings.editable_settings[SettingsKeys.WHISPER_INITIAL_PROMPT.value].strip() not in SettingsWindow.AUTO_DETECT_LANGUAGE_CODES:
-                        body['initial_prompt'] = app_settings.editable_settings[SettingsKeys.WHISPER_INITIAL_PROMPT.value].strip()
+                    language, prompt = speech_options()
+                    if language:
+                        body["language_code"] = language
+                    body['initial_prompt'] = prompt
 
                     try:
                         verify = not app_settings.editable_settings[SettingsKeys.S2T_SELF_SIGNED_CERT.value]
@@ -893,6 +956,8 @@ def toggle_recording(resume=False):
     if not is_recording:
         is_audio_processing_realtime_canceled.clear()
         is_audio_processing_whole_canceled.clear()
+        if not resume:
+            visit_language.reset()
 
     if is_paused:
         toggle_pause()
@@ -1161,7 +1226,7 @@ def send_audio_to_server():
             # Transcribe the audio file using the loaded model
             transcription_error = None
             try:
-                result = faster_whisper_transcribe(file_to_send, app_settings=app_settings)
+                result = transcribe_local(file_to_send)
                 if app_settings.editable_settings[SettingsKeys.ENABLE_HALLUCINATION_CLEAN.value] and FeatureToggle.HALLUCINATION_CLEANING:
                     result = hallucination_cleaner.clean_text(result)
             except Exception as e:
@@ -1226,11 +1291,10 @@ def send_audio_to_server():
                 "use_translate": app_settings.editable_settings[SettingsKeys.USE_TRANSLATE_TASK.value],
             }
 
-            if app_settings.editable_settings[SettingsKeys.WHISPER_LANGUAGE_CODE.value] not in SettingsWindow.AUTO_DETECT_LANGUAGE_CODES:
-                body["language_code"] = app_settings.editable_settings[SettingsKeys.WHISPER_LANGUAGE_CODE.value]
-
-            if app_settings.editable_settings[SettingsKeys.WHISPER_INITIAL_PROMPT.value] not in SettingsWindow.AUTO_DETECT_LANGUAGE_CODES:
-                body['initial_prompt'] = app_settings.editable_settings[SettingsKeys.WHISPER_INITIAL_PROMPT.value]
+            language, prompt = speech_options()
+            if language:
+                body["language_code"] = language
+            body['initial_prompt'] = prompt
 
             try:
                 verify = not app_settings.editable_settings[SettingsKeys.S2T_SELF_SIGNED_CERT.value]
@@ -1600,7 +1664,7 @@ def generate_note(formatted_message, cancel_event):
         summary = None
         current_prompt_info = NoteStyleSelector.get_current_prompt_info()
         # The chosen level of detail is added to the template's closing instructions
-        post_prompt = f"{current_prompt_info.post_prompt} {get_detail_instruction()}".strip()
+        post_prompt = f"{current_prompt_info.post_prompt} {SPEAKER_INSTRUCTION} {get_detail_instruction()}".strip()
         if use_aiscribe:
             # If pre-processing is enabled
             if app_settings.editable_settings[SettingsKeys.USE_PRE_PROCESSING.value]:
@@ -2090,7 +2154,7 @@ def transcribe_audio(audio):
         if not is_whisper_valid():
             raise RuntimeError("The speech-to-text model is still loading. Try again in a moment.")
         try:
-            text = faster_whisper_transcribe(audio, app_settings=app_settings)
+            text = transcribe_local(audio)
         finally:
             if low_memory:
                 unload_stt_model()
@@ -2098,11 +2162,10 @@ def transcribe_audio(audio):
         settings = app_settings.editable_settings
         headers = {"Authorization": f"Bearer {settings[SettingsKeys.WHISPER_SERVER_API_KEY.value]}"}
         body = {"use_translate": settings[SettingsKeys.USE_TRANSLATE_TASK.value]}
-        if settings[SettingsKeys.WHISPER_LANGUAGE_CODE.value] not in SettingsWindow.AUTO_DETECT_LANGUAGE_CODES:
-            body["language_code"] = settings[SettingsKeys.WHISPER_LANGUAGE_CODE.value]
-        prompt = str(settings[SettingsKeys.WHISPER_INITIAL_PROMPT.value]).strip()
-        if prompt not in SettingsWindow.AUTO_DETECT_LANGUAGE_CODES:
-            body["initial_prompt"] = prompt
+        language, prompt = speech_options()
+        if language:
+            body["language_code"] = language
+        body["initial_prompt"] = prompt
         files = {"audio": ("dictation.wav", to_wav_bytes(audio, RATE), "audio/wav")}
         response = requests.post(settings[SettingsKeys.WHISPER_ENDPOINT.value], headers=headers, files=files,
                                  data=body, verify=not settings[SettingsKeys.S2T_SELF_SIGNED_CERT.value])
@@ -2305,6 +2368,7 @@ def upload_file():
     global uploaded_file_path
     file_path = filedialog.askopenfilename(filetypes=(("Audio files", "*.wav *.mp3 *.m4a"),))
     if file_path:
+        visit_language.reset()
         uploaded_file_path = file_path
         # The uploaded audio becomes a session of its own
         workspace.begin_capture()
@@ -2537,6 +2601,8 @@ def get_transcription_language():
     """The transcription language shown in the session header."""
     language = str(app_settings.editable_settings[SettingsKeys.WHISPER_LANGUAGE_CODE.value]).strip()
     if language in SettingsWindow.AUTO_DETECT_LANGUAGE_CODES:
+        if visit_language.language:
+            return f"Auto-detect: {visit_language.language.upper()}"
         return "Auto-detect"
     return language.upper() if len(language) <= 3 else language
 
@@ -2560,6 +2626,7 @@ workspace = Workspace(
         "generate_document": generate_document,
         "fill_form": fill_form,
         "open_chat": open_chat,
+        "find_drug_flags": find_drug_flags,
         "open_eform_mapper": open_eform_mapper,
         "toggle_view": toggle_view,
         "open_settings": window.open_settings,
@@ -2780,7 +2847,7 @@ def generate_note_bind(event, data: np.ndarray):
 
         wav_data = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768
 
-        result = faster_whisper_transcribe(wav_data)
+        result = transcribe_local(wav_data)
 
         update_gui(result)
 

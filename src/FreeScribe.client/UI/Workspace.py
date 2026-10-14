@@ -281,6 +281,7 @@ class Workspace:
         self._busy_phase = 0
         self._status_rows = []
         self.chat_panel = None
+        self._ignored_words = set()      # words the clinician confirmed are right
 
         self._build()
         self.select_session(self._blank_session())
@@ -687,10 +688,14 @@ class Workspace:
         self.context = TextArea(self.pages, placeholder=CONTEXT_PLACEHOLDER, padx=32,
                                 on_change=lambda value: self._update_field("context", value))
         self.transcript = TextArea(self.pages, placeholder=TRANSCRIPT_PLACEHOLDER, padx=32,
-                                   on_change=lambda value: self._update_field("transcript", value))
+                                   on_change=lambda value: (self._update_field("transcript", value),
+                                                            self._schedule_drug_check(self.transcript)))
         self.note = TextArea(self.pages, placeholder=NOTE_PLACEHOLDER, padx=32, reading=True,
                              on_section_copy=self._section_copied,
-                             on_change=lambda value: self._update_field("note", value))
+                             on_change=lambda value: (self._update_field("note", value),
+                                                      self._schedule_drug_check(self.note)))
+        for area in (self.transcript, self.note):
+            area.on_flag_ignore = self._ignore_word
         self._pages = {"context": self.context, "transcript": self.transcript, "note": self.note}
         for page in self._pages.values():
             page.grid(row=0, column=0, sticky="nsew")
@@ -1011,6 +1016,33 @@ class Workspace:
         """Make sure edits still waiting on the debounce timer reach the session."""
         for page in list(self._pages.values()):
             page.flush_change()
+
+    # ------------------------------------------------------------ drug names
+    def check_drug_names(self, area=None):
+        """Underline words that look like a misheard drug name in ``area`` (default: every page)."""
+        areas = [area] if area is not None else list(self._pages.values())
+        for page in areas:
+            if page is self.context:
+                continue
+            flags = self._act("find_drug_flags", page.get_text(), default=None)
+            if flags is not None:
+                page.set_flags([f for f in flags if f[2].lower() not in self._ignored_words])
+
+    def _schedule_drug_check(self, area):
+        """Check a page a moment after typing stops (live transcription arrives in many small pieces)."""
+        jobs = self.__dict__.setdefault("_drug_jobs", {})
+        job = jobs.pop(id(area), None)
+        if job is not None:
+            try:
+                self.root.after_cancel(job)
+            except tk.TclError:
+                pass
+        jobs[id(area)] = self.root.after(700, lambda: (jobs.pop(id(area), None),
+                                                       area.winfo_exists() and self.check_drug_names(area)))
+
+    def _ignore_word(self, word):
+        self._ignored_words.add(word.lower())
+        self.check_drug_names()
 
     def _update_field(self, field, value):
         session = self.current
@@ -1612,6 +1644,9 @@ class Workspace:
         tab_id = f"doc:{document.id}"
         area = TextArea(self.pages, placeholder="", padx=32, reading=True, on_section_copy=self._section_copied,
                         on_change=lambda value, d=document: self._update_document(d, value))
+        area._on_change = (lambda value, d=document, a=area: (self._update_document(d, value),
+                                                              self._schedule_drug_check(a)))
+        area.on_flag_ignore = self._ignore_word
         area.grid(row=0, column=0, sticky="nsew")
         area.set_text(document.text)
         area.set_readonly(self.locked)

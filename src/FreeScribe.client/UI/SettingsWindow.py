@@ -145,6 +145,10 @@ class SettingsWindow():
             # Best of N (Experimental), by default we only generate 1 completion of note, if this is set to a number greater than 1, we will generate N completions and pick the best one.
             SettingsKeys.BEST_OF.value: 1,
             SettingsKeys.TRANSCRIBE_ONLY_MODE.value: False,
+            # Words for speech-to-text to listen for (one per line or comma separated)
+            SettingsKeys.MEDICAL_VOCABULARY.value: "",
+            # Underline words in notes and transcripts that look like a misheard drug name
+            SettingsKeys.DRUG_NAME_CHECK.value: True,
         }
 
     def __init__(self):

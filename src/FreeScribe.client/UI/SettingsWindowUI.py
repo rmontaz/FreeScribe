@@ -357,8 +357,31 @@ class SettingsWindowUI:
 
         left_row += 1
 
+        self._create_vocabulary_settings()
+
         # set the state of the whisper settings based on the SettingsKeys.LOCAL_WHISPER.value checkbox once all widgets are created
         self.toggle_remote_whisper_settings()
+
+    def _create_vocabulary_settings(self):
+        """Medical vocabulary for speech-to-text and the drug-name check."""
+        frame = tk.Frame(self.whisper_settings_frame)
+        frame.grid(row=1, column=0, columnspan=2, padx=10, pady=(10, 5), sticky="nsew")
+        frame.columnconfigure(0, weight=1)
+        tk.Label(frame, text="Medical vocabulary", font=("Arial", 10, "bold")).grid(row=0, column=0, sticky="w")
+        tk.Label(frame, justify="left", font=("Arial", 9), wraplength=620, text=(
+            "Words the speech-to-text should listen for, one per line or separated by commas: drug names, "
+            "conditions or terms you use often. FreeScribe also adds drug names it finds in each session's "
+            "Context (for example the patient's medication list) and common clinical terms. Only about 150 "
+            "words are used at a time, so keep the list short.")).grid(row=1, column=0, sticky="w", pady=(2, 4))
+        self.vocabulary_text = tk.Text(frame, height=4, width=70, wrap="word")
+        value = str(self.settings.editable_settings.get(SettingsKeys.MEDICAL_VOCABULARY.value, "") or "")
+        self.vocabulary_text.insert("1.0", value)
+        self.vocabulary_text.grid(row=2, column=0, sticky="ew")
+        self.drug_check_var = tk.IntVar(value=1 if self.settings.editable_settings.get(
+            SettingsKeys.DRUG_NAME_CHECK.value, True) else 0)
+        tk.Checkbutton(frame, variable=self.drug_check_var, text=(
+            "Underline words in transcripts and notes that look like a misheard drug name "
+            "(drug names from Health Canada and RxNorm)")).grid(row=3, column=0, sticky="w", pady=(6, 0))
 
     def toggle_remote_whisper_settings(self):
         current_state = self.settings.editable_settings_entries[SettingsKeys.LOCAL_WHISPER.value].get()
@@ -919,6 +942,10 @@ pady=5, sticky="w")
 
         # save the intial prompt
         self.settings.editable_settings[SettingsKeys.WHISPER_INITIAL_PROMPT.value] = self.initial_prompt.get("1.0", "end-1c") # end-1c removes the trailing newline
+
+        # medical vocabulary and the drug-name check
+        self.settings.editable_settings[SettingsKeys.MEDICAL_VOCABULARY.value] = self.vocabulary_text.get("1.0", "end-1c").strip()
+        self.settings.editable_settings[SettingsKeys.DRUG_NAME_CHECK.value] = bool(self.drug_check_var.get())
 
         if FeatureToggle.INTENT_ACTION:
             # Save Google Maps API key

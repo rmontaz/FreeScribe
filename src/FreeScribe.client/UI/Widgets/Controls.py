@@ -602,6 +602,13 @@ class TextArea(tk.Frame):
         self._scroll_visible = False
 
         self.text.tag_configure("heading", font=Theme.font("medium", "semibold"), spacing1=Theme.px(8))
+        # Words that look like a misheard drug name
+        self.text.tag_configure("flag", underline=True, foreground=Palette.WARNING)
+        self.text.tag_bind("flag", "<Button-1>", self._on_flag_click)
+        self.text.tag_bind("flag", "<Enter>", lambda e: self.text.configure(cursor="hand2"))
+        self.text.tag_bind("flag", "<Leave>", lambda e: self.text.configure(cursor="xterm"))
+        self._flags = []
+        self.on_flag_ignore = None
         if reading:
             self.text.configure(font=font or Theme.font("large"), spacing1=Theme.px(2), spacing2=Theme.px(3),
                                 spacing3=Theme.px(3))
@@ -745,6 +752,60 @@ class TextArea(tk.Frame):
                 self._sections.append((heading, f"1.0+{match.start()}c", body))
         # Let Tk lay the lines out with the heading style first, so the buttons line up with them
         self.after(15, self._layout_section_buttons)
+
+    def set_flags(self, flags):
+        """Underline ``flags`` - (start, end, word, suggestions) character ranges in the text."""
+        self._flags = list(flags)
+        self.text.tag_remove("flag", "1.0", "end")
+        for start, end, _word, _options in self._flags:
+            self.text.tag_add("flag", f"1.0+{start}c", f"1.0+{end}c")
+
+    def flags(self):
+        return list(self._flags)
+
+    def flag_items(self, number):
+        """Menu items for flagged word ``number``: replace it with a suggestion, or leave it."""
+        start, end, word, options = self._flags[number]
+        items = [{"label": f"“{word}” may be a misheard drug name", "header": True}]
+        for option in options:
+            items.append({"label": f"Change to {option}",
+                          "command": lambda o=option, s=start, e=end, w=word: self.replace_flag(s, e, w, o),
+                          "enabled": not self._readonly})
+        items.append(None)
+        items.append({"label": f"“{word}” is right", "command": lambda w=word: self._ignore_flag(w)})
+        return items
+
+    def replace_flag(self, start, end, word, replacement):
+        """Replace the flagged ``word`` (if it is still there) as one undoable edit."""
+        first, last = f"1.0+{start}c", f"1.0+{end}c"
+        if self._readonly or self.text.get(first, last) != word:
+            return False
+        if word.isupper():
+            replacement = replacement.upper()
+        elif word[:1].isupper():
+            replacement = replacement[:1].upper() + replacement[1:]
+        # One undo step for the whole swap
+        self.text.configure(autoseparators=False)
+        self.text.edit_separator()
+        self.text.delete(first, last)
+        self.text.insert(first, replacement)
+        self.text.edit_separator()
+        self.text.configure(autoseparators=True)
+        self._after_programmatic_change()
+        return True
+
+    def _ignore_flag(self, word):
+        if callable(self.on_flag_ignore):
+            self.on_flag_ignore(word)
+
+    def _on_flag_click(self, event):
+        index = self.text.index(f"@{event.x},{event.y}")
+        offset = len(self.text.get("1.0", index))
+        for number, (start, end, _word, _options) in enumerate(self._flags):
+            if start <= offset <= end:
+                popup_menu(self.text, self.flag_items(number), at=(event.x_root, event.y_root + Theme.px(8)))
+                return "break"
+        return None
 
     def section_texts(self):
         """[(heading, body)] of the sections found in the reading layout."""
@@ -1282,8 +1343,8 @@ def build_menu(parent, items):
     return menu
 
 
-def popup_menu(anchor, items, align="left"):
-    """Post a drop-down menu just below ``anchor``."""
+def popup_menu(anchor, items, align="left", at=None):
+    """Post a drop-down menu just below ``anchor`` (or at screen position ``at``)."""
     popup_menu.last_items = items
     if not popup_menu.enabled:
         return None
@@ -1293,6 +1354,8 @@ def popup_menu(anchor, items, align="left"):
     if align == "right":
         x = anchor.winfo_rootx() + anchor.winfo_width() - menu.winfo_reqwidth()
     y = anchor.winfo_rooty() + anchor.winfo_height() + Theme.px(4)
+    if at is not None:
+        x, y = at
     try:
         menu.tk_popup(max(0, x), y)
     finally:

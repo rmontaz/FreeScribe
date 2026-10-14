@@ -626,3 +626,28 @@ def test_note_sections_ticks_and_edit_suggestions(root, workspace):
     assert workspace.suggestions.winfo_manager() == "pack"
     workspace._use_suggestion(EDIT_SUGGESTIONS[0])
     assert workspace.calls[-1][0] == "ask" and workspace.calls[-1][1][0] == EDIT_SUGGESTIONS[0]
+
+
+def test_misheard_drug_names_are_underlined_and_can_be_fixed(root, workspace):
+    from services.medical_vocab import DrugLexicon
+    from UI.Widgets import Controls
+    lexicon = DrugLexicon.load()
+    workspace.actions["find_drug_flags"] = lexicon.flags
+    type_into(root, workspace.transcript, "Doctor: hello.")
+    workspace.apply_note(workspace.current.id, "Plan:\nStart amlodapine 5 mg daily.\nContinue metformin.")
+    pump(root, 1.2)
+    flags = workspace.note.flags()
+    assert [(f[2], f[3][0]) for f in flags] == [("amlodapine", "amlodipine")]
+    assert workspace.note.text.tag_ranges("flag")
+    items = workspace.note.flag_items(0)
+    change = next(i for i in items if i and i["label"] == "Change to amlodipine")
+    change["command"]()
+    pump(root, 1.2)
+    assert "Start amlodipine 5 mg daily." in workspace.current.note
+    assert workspace.note.flags() == []
+    workspace.note.undo()                                   # one undo brings the word back
+    pump(root, 1.2)
+    assert "amlodapine" in workspace.note.get_text()
+    ignore = next(i for i in workspace.note.flag_items(0) if i and i["label"].endswith("is right"))
+    ignore["command"]()
+    assert workspace.note.flags() == []

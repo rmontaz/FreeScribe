@@ -375,6 +375,16 @@ DETAIL_LEVELS = {
 DEFAULT_DETAIL_LEVEL = "Standard"
 
 
+# Transcripts carry no speaker labels; this keeps the note from crediting the clinician's
+# questions to the patient (a question about chest pain is not chest pain).
+SPEAKER_INSTRUCTION = (
+    "The transcript is a conversation between the clinician and the patient, sometimes with others such as a "
+    "family member, and has no speaker labels. Work out who said what from the context: the clinician usually "
+    "asks questions and explains, the patient describes symptoms and history. Record a symptom as present only "
+    "when the patient confirms it, not when the clinician only asks about it."
+)
+
+
 def compose_source(transcript: str, context: str = "") -> str:
     """Combine the transcript and the clinician's context into the text sent for note generation."""
     transcript = (transcript or "").strip()
