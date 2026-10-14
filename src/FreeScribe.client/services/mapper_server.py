@@ -2,7 +2,7 @@
 mapper_server.py
 
 A small web server, reachable only from this computer, that serves the bundled
-OSCAR eForm Mapper and answers its "Find fields from PDF" requests.
+OSCAR eForm Mapper and answers its "Find fields" requests.
 
 Why a server: the mapper is a web page. Opened as a file it cannot talk to
 FreeScribe, and browsers also refuse to run pdf.js's background worker there.

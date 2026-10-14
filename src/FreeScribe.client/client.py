@@ -2359,7 +2359,7 @@ def open_eform_mapper():
             try:
                 from services.eform_mapping import MappingError
                 user_errors = (MappingError,)
-            except ImportError:      # PyMuPDF missing: the mapper still works, without "Find fields from PDF"
+            except ImportError:      # PyMuPDF missing: the mapper still works, without "Find fields"
                 user_errors = ()
             eform_mapper_server = MapperServer(
                 mapper_dir, {"/api/detect": _detect_eform_fields},

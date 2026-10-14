@@ -28,9 +28,15 @@ Used to find the blanks on flat PDF forms and add form fields to them. PyMuPDF v
 
 PyMuPDF and the MuPDF library it includes are dual-licensed by Artifex Software, Inc. FreeScribe uses them under the GNU Affero General Public License v3.0, the same licence as FreeScribe itself. Their complete source code is available from the link above and from [mupdf.com](https://mupdf.com). MuPDF in turn includes third-party libraries under their own licences, which are listed in its source distribution.
 
+## Tesseract OCR and its English data
+
+Used to read the labels of scanned forms and page images in the eForm mapper. The Tesseract OCR engine is built into the MuPDF library included with PyMuPDF (above), together with the Leptonica image library it needs. Tesseract, Copyright (c) Google Inc. and the Tesseract contributors, [github.com/tesseract-ocr/tesseract](https://github.com/tesseract-ocr/tesseract), Apache License 2.0. Leptonica, Copyright (c) Dan Bloomberg and the Leptonica contributors, [leptonica.org](http://www.leptonica.org), BSD 2-Clause licence.
+
+The English recognition data `assets/ocr/eng.traineddata` is from [github.com/tesseract-ocr/tessdata_fast](https://github.com/tesseract-ocr/tessdata_fast), Copyright (c) Google Inc. and the Tesseract contributors, Apache License 2.0 (included as `assets/ocr/LICENSE-tessdata.txt`). It is unchanged.
+
 ## OSCAR eForm Mapper
 
-The eForm mapper that opens from FreeScribe's sidebar is the OSCAR eForm Mapper (eForm Generator, Standalone v19), Copyright (c) 2026 the eForm Generator author(s), released under the MIT License. FreeScribe's copy adds the "Find fields from PDF" connection; the rest is unchanged. Its files are in `assets/eform_mapper/`:
+The eForm mapper that opens from FreeScribe's sidebar is the OSCAR eForm Mapper (eForm Generator, Standalone v19), Copyright (c) 2026 the eForm Generator author(s), released under the MIT License. FreeScribe's copy adds the "Find fields" connection; the rest is unchanged. Its files are in `assets/eform_mapper/`:
 
 * `LICENSE.txt`: the mapper's MIT License
 * `eForm_Generator_ATTRIBUTIONS.md`: the mapper's own list of the components it uses and the ones its exported eForms use (jQuery, OSCAR EMR conventions)

@@ -11,7 +11,7 @@
       faxControl.js (GPL-2.0); export template patterns adapted from OSCAR community eForms.
   Libraries load from ./vendor/ first and fall back to cdnjs (SRI-pinned) if absent.
 
-  Bundled with FreeScribe: this copy adds a "Find fields from PDF" button that
+  Bundled with FreeScribe: this copy adds a "Find fields" button that
   appears when FreeScribe opens the page (look for "FreeScribe connection").
   Everything else is the mapper as written by its author(s); the original is unchanged.
 -->
@@ -267,7 +267,7 @@
     <div id="fsPanel" class="fs-panel" hidden>
       <div class="row" style="align-items:center">
         <span class="fs-badge">FreeScribe</span><span id="fsStatus" class="small"></span>
-        <button id="btnFsDetect" class="btn-violet" title="FreeScribe reads the PDF itself and places fields exactly where it draws lines, boxes and tick boxes. Works for PDFs made on a computer, not for scans.">Find fields from PDF</button>
+        <button id="btnFsDetect" class="btn-violet" title="FreeScribe finds the fields, names them from the words beside them and suggests tags. It reads the source PDF when there is one; scanned pages and page images (PNG, JPEG) are read with OCR.">Find fields</button>
         <select id="fsScope" title="Which mapper pages to fill">
           <option value="page">This page</option>
           <option value="all">All pages</option>
@@ -279,7 +279,7 @@
         <button id="btnFsPickPdf" type="button">Choose source PDF&hellip;</button>
         <input id="fsPdfFile" type="file" accept="application/pdf,.pdf" hidden/>
       </div>
-      <div class="small" style="margin-top:4px">For scanned forms, keep using Auto Detect.</div>
+      <div class="small" style="margin-top:4px">Works for computer-made PDFs, scanned or faxed PDFs, and page images (PNG, JPEG). Scans are read with OCR on this computer.</div>
     </div>
 
     <div class="quickstart">
@@ -3291,7 +3291,7 @@ function buildDraftIntoEditor(){ try{ $('exportEditor').value = buildExportHtml(
     const el = $('fsPdfName');
     if (!el) return;
     el.textContent = state.sourcePdf ? `Source PDF: ${state.sourcePdf.name}`
-                                     : 'No source PDF yet. Load the form with the PDF→Image Tool, or choose it:';
+                                     : 'No source PDF: the page images will be read with OCR. If the form came from a PDF, choosing it gives exact positions:';
   }
   async function fsRequest(path, body){
     const headers = { 'X-FreeScribe-Token': FS.token };
@@ -3309,22 +3309,24 @@ function buildDraftIntoEditor(){ try{ $('exportEditor').value = buildExportHtml(
   }
   async function fsFindFields(){
     if (FS.busy) return;
-    if (!state.sourcePdf){ msg('Choose the PDF this form came from first.', 'warn'); $('fsPdfFile').click(); return; }
     const pages = fsTargetPages();
-    if (!pages.length){ msg('Load the form pages first (PDF→Image Tool).', 'warn'); return; }
+    if (!pages.length){ msg('Load the form pages first (PDF→Image Tool, or upload page images).', 'warn'); return; }
     const replace = $('fsReplace').checked;
     const before = state.fields.filter(f => pages.includes(Number(f.page))).length;
     const kept = replace ? state.fields.filter(f => !pages.includes(Number(f.page))) : state.fields;
     FS.busy = true; $('btnFsDetect').disabled = true;
-    msg('FreeScribe is reading the PDF and suggesting tags… (the AI step can take a little while)');
+    msg(state.sourcePdf ? 'FreeScribe is reading the PDF and suggesting tags… (scanned pages and the AI step take a few seconds each)'
+                        : 'FreeScribe is reading the page images with OCR and suggesting tags… (a few seconds a page)');
     try{
-      const res = await fsRequest('/api/detect', {
-        pdf: state.sourcePdf.data,
-        pages: pages.map(n => ({ page: n, pdfPage: state.pages[n].pdfPage || n,
-                                 naturalW: state.pages[n].naturalW, naturalH: state.pages[n].naturalH })),
-        tagCatalog: [...state.tagCatalog],
-        takenNames: kept.map(f => f.name)
-      });
+      const request = { tagCatalog: [...state.tagCatalog], takenNames: kept.map(f => f.name) };
+      if (state.sourcePdf){
+        request.pdf = state.sourcePdf.data;
+        request.pages = pages.map(n => ({ page: n, pdfPage: state.pages[n].pdfPage || n,
+                                          naturalW: state.pages[n].naturalW, naturalH: state.pages[n].naturalH }));
+      } else {
+        request.images = pages.map(n => ({ page: n, data: state.pages[n].imgData }));
+      }
+      const res = await fsRequest('/api/detect', request);
       const found = res.fields || [];
       pushUndo();
       if (replace) state.fields = kept;
@@ -3338,10 +3340,12 @@ function buildDraftIntoEditor(){ try{ $('exportEditor').value = buildExportHtml(
       const tagNote = `${byRules} tagged from their labels` + (byAI ? `, ${byAI} tag(s) suggested by the AI (check those)` : '') + '.';
       const where = pages.length === 1 ? `page ${pages[0]}` : `${pages.length} pages`;
       const replaced = replace && before ? ` Replaced the ${before} field(s) that were there (Undo brings them back).` : '';
+      const scannedPages = (res.summary && res.summary.pagesReadWithOcr) || 0;
+      const ocrNote = scannedPages ? ` ${scannedPages === pages.length ? 'Read' : scannedPages + ' page(s) read'} from the picture with OCR: check the labels and box sizes.` : '';
       msg(found.length
-          ? `Found ${found.length} field(s) on ${where}: ${boxes} checkbox(es) and ${found.length - boxes} other. ${tagNote}${replaced} Check them before exporting.`
+          ? `Found ${found.length} field(s) on ${where}: ${boxes} checkbox(es) and ${found.length - boxes} other. ${tagNote}${ocrNote}${replaced} Check them before exporting.`
           : `No fields found on ${where}.`, found.length ? 'ok' : 'warn');
-    }catch(err){ msg('Find fields from PDF failed: ' + (err.message || err), 'err'); }
+    }catch(err){ msg('Find fields failed: ' + (err.message || err), 'err'); }
     finally{ FS.busy = false; $('btnFsDetect').disabled = false; }
   }
   async function fsConnect(){

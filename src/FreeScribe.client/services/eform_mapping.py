@@ -1,7 +1,7 @@
 """
 eform_mapping.py
 
-The work behind the "Find fields from PDF" button of the bundled OSCAR eForm Mapper.
+The work behind the "Find fields" button of the bundled OSCAR eForm Mapper.
 
 The mapper works on page images and finds boxes by their pixels. When the form
 came from a PDF that was made on a computer (not scanned), the PDF itself says
@@ -16,6 +16,10 @@ FreeScribe reads that and returns:
   (patient name, date of birth, health card ...), always from the mapper's tag list.
   :func:`suggest_tags` asks the AI model about the rest, and keeps only answers
   from the tag list that fit the label.
+
+A scanned or faxed PDF, or a form loaded as page images (PNG, JPEG), has no
+lines or words to read; :mod:`services.scan_form` finds the boxes, lines and tick
+boxes in the picture and reads the words with OCR, and the same steps follow.
 
 Coordinates: the mapper stores fields in pixels of its page image
 (``naturalW`` x ``naturalH``); PDF pages are measured in points. Each mapper page
@@ -33,7 +37,7 @@ from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import pymupdf
 
-from services import flat_form
+from services import flat_form, scan_form
 from services.form_filler import parse_answers
 
 # The mapper's default tag list (eForm_Generator.html, DEFAULT_TAGS)
@@ -177,6 +181,11 @@ def has_text(doc) -> bool:
     return any(page.get_text("text").strip() for page in doc)
 
 
+def is_picture(page) -> bool:
+    """A page with no text to read: a scan, a photo, or text drawn as shapes. It is read with OCR."""
+    return not page.get_text("text").strip()
+
+
 # ============================================================== find fields
 def find_fields(doc, pages: Sequence[PageInfo]) -> List[dict]:
     """
@@ -189,7 +198,9 @@ def find_fields(doc, pages: Sequence[PageInfo]) -> List[dict]:
     for info in pages:
         page = doc[info.pdf_page - 1]
         blanks = _widget_blanks(page, info.pdf_page - 1)
-        if not blanks:
+        if not blanks and is_picture(page):
+            blanks = scan_form.page_blanks(page, info.pdf_page - 1)
+        elif not blanks:
             blanks = flat_form._page_blanks(page, info.pdf_page - 1, keep_unlabelled=True)
         else:
             flat_form.label_blanks(blanks, flat_form.page_words(page))
@@ -472,12 +483,23 @@ def normalize_tag(tag: str) -> str:
 
 # =========================================================== the endpoints
 def detect(payload: dict, ask_llm: Optional[Callable[[str], str]] = None) -> dict:
-    """``/api/detect``: fields found from the PDF for the requested pages, labelled, named and tagged."""
-    doc = open_pdf(_pdf_bytes(payload))
-    if not has_text(doc):
-        raise MappingError("This PDF is a scanned image with no text to read. Use the mapper's "
-                           "Auto Detect for scanned forms, then name and tag the fields by hand.")
-    pages = parse_pages(payload.get("pages"), doc.page_count)
+    """
+    ``/api/detect``: fields found for the requested pages, labelled, named and tagged.
+
+    The payload carries the source PDF (``pdf``), or, for a form loaded as images,
+    the page images themselves (``images``: [{page, data}]). Pages that are only
+    pictures are read with OCR (:mod:`services.scan_form`).
+    """
+    if payload.get("pdf"):
+        doc = open_pdf(_pdf_bytes(payload))
+        pages = parse_pages(payload.get("pages"), doc.page_count)
+    elif payload.get("images"):
+        doc, pages = _image_pages(payload)
+    else:
+        raise MappingError("The mapper did not send the source PDF or the page images.")
+    if not scan_form.available() and any(is_picture(doc[info.pdf_page - 1]) for info in pages):
+        raise MappingError("This form is a scanned picture with no text, and the OCR data that reads "
+                           "pictures is missing from this installation. Use the mapper's Auto Detect instead.")
     for info in pages:
         page = doc[info.pdf_page - 1]
         if abs(page.rect.width / page.rect.height - info.natural_w / info.natural_h) > 0.03:
@@ -495,7 +517,29 @@ def detect(payload: dict, ask_llm: Optional[Callable[[str], str]] = None) -> dic
         if tag == "current_user_signature_image":
             field["type"] = "signature"
         del field["id"]
-    return {"fields": fields, "summary": _summary(fields)}
+    scanned = sum(1 for info in pages if is_picture(doc[info.pdf_page - 1]))
+    return {"fields": fields, "summary": {**_summary(fields), "pagesReadWithOcr": scanned}}
+
+
+def _image_pages(payload: dict):
+    """A PDF made of the mapper's page images, and the mapper pages they belong to."""
+    import base64
+    images, pages = [], []
+    for item in payload.get("images") or []:
+        try:
+            mapper_page = int(item.get("page"))
+            data = str(item.get("data") or "")
+            if data.startswith("data:"):
+                data = data.split(",", 1)[1]
+            raw = base64.b64decode(data, validate=False)
+            pix = pymupdf.Pixmap(raw)
+        except Exception:
+            continue
+        images.append(raw)
+        pages.append(PageInfo(mapper_page, len(images), float(pix.width), float(pix.height)))
+    if not images:
+        raise MappingError("The page images sent by the mapper could not be read.")
+    return scan_form.image_document(images), pages
 
 
 def _summary(fields: Sequence[dict]) -> dict:

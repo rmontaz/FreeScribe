@@ -87,8 +87,15 @@ class TestDetect:
         tags = {f["oscarTag"] for f in result["fields"]} - {""}
         assert tags <= {"patient_name", "today"} and "patient_name" in tags
 
-    def test_scanned_pdf(self):
-        with pytest.raises(em.MappingError, match="scanned"):
+    def test_scanned_pdf_is_read_with_ocr(self):
+        result = em.detect(payload("scanned_form.pdf", [{"page": 1, "pdfPage": 1, **LETTER}]))
+        assert result["summary"]["pagesReadWithOcr"] == 1
+        field = fields_by_label(result)["Patient name"]
+        assert field["oscarTag"] == "patient_name" and field["source"] == "rule"
+
+    def test_scanned_pdf_without_ocr_data(self, monkeypatch):
+        monkeypatch.setattr(em.scan_form, "available", lambda: False)
+        with pytest.raises(em.MappingError, match="OCR data"):
             em.detect(payload("scanned_form.pdf", [{"page": 1, "pdfPage": 1, **LETTER}]))
 
     def test_bad_requests(self):

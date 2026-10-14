@@ -104,22 +104,31 @@ def label_blanks(blanks: List[Blank], words: List["_Word"]):
     _label_by_line(blanks, words)
 
 
-def _page_blanks(page, page_index, keep_unlabelled: bool = False) -> List[Blank]:
-    words = page_words(page)
-    glyph_boxes = _glyph_checkboxes(page, page_index)
-    # The box characters themselves are not label text
-    words = [w for w in words if not any(_rects_overlap((w.x0, w.y0, w.x1, w.y1), b.rect) and
-                                         len(w.text.strip()) <= 3 for b in glyph_boxes)]
-    hlines, vlines, rects = _drawings(page)
+def _page_blanks(page, page_index, keep_unlabelled: bool = False, parts=None) -> List[Blank]:
+    """
+    The blanks of one page. ``parts`` is (words, hlines, vlines, boxes) already read
+    from a page that is only a picture (:mod:`services.scan_form`); otherwise they
+    are read from the PDF.
+    """
     page_rect = page.rect
-
     found: List[Blank] = []
-    table_blanks, table_areas = _table_blanks(page, words, page_index)
-    found += table_blanks
+    if parts is not None:
+        words, hlines, _vlines, rects = parts
+        hlines, rects, glyph_boxes, table_areas = list(hlines), list(rects), [], []
+    else:
+        words = page_words(page)
+        glyph_boxes = _glyph_checkboxes(page, page_index)
+        # The box characters themselves are not label text
+        words = [w for w in words if not any(_rects_overlap((w.x0, w.y0, w.x1, w.y1), b.rect) and
+                                             len(w.text.strip()) <= 3 for b in glyph_boxes)]
+        hlines, vlines, rects = _drawings(page)
 
-    # Table borders are drawn as lines; they are not blanks themselves
-    hlines = [l for l in hlines if not any(_inside((l[0], l[1], l[2], l[1]), area) for area in table_areas)]
-    rects += _boxes_from_lines(hlines, vlines)
+        table_blanks, table_areas = _table_blanks(page, words, page_index)
+        found += table_blanks
+
+        # Table borders are drawn as lines; they are not blanks themselves
+        hlines = [l for l in hlines if not any(_inside((l[0], l[1], l[2], l[1]), area) for area in table_areas)]
+        rects += _boxes_from_lines(hlines, vlines)
     rects = [r for r in rects if not any(_inside(r, area) for area in table_areas)]
     box_edges = [r for r in rects]
     hlines = [l for l in hlines if not any(_on_box_edge(l, r) for r in box_edges)]
@@ -176,7 +185,7 @@ def _merge_segments(hlines):
     for x0, y, x1 in sorted(hlines, key=lambda l: (round(l[1]), l[0])):
         if merged and abs(merged[-1][1] - y) < 1 and x0 <= merged[-1][2] + 1.5:
             last = merged[-1]
-            merged[-1] = (last[0], last[1], max(last[2], x1))
+            merged[-1] = (min(last[0], x0), last[1], max(last[2], x1))
         else:
             merged.append((x0, y, x1))
     return merged
