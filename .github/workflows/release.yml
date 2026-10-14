@@ -80,7 +80,7 @@ jobs:
 
   
   build-macos-intel:
-    runs-on: macos-13
+    runs-on: macos-15-intel   # macos-13 runners are retired
     permissions:
       contents: write
     steps:
@@ -161,9 +161,62 @@ jobs:
           name: FreeScribeInstaller_arm64.pkg
           path: dist/FreeScribeInstaller_arm64.pkg
 
+  build-linux:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create Version Text File for PyInstaller
+        run: echo "${GITHUB_REF#refs/tags/}" > scripts/__version__
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install PortAudio and ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y portaudio19-dev ffmpeg
+
+      - name: Install CPU-only PyTorch
+        run: |
+          pip install torch==2.7.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Install requirements
+        run: |
+          pip install -r client_requirements.txt
+
+      - name: Run PyInstaller
+        run: |
+          pyinstaller --runtime-hook=./scripts/runtime_hooks/hook-runtime.py --additional-hooks-dir=./scripts/hooks \
+            --hidden-import=en_core_web_md --hidden-import=en_core_sci_md \
+            --hidden-import=PIL._tkinter_finder --hidden-import=PIL.ImageTk \
+            --add-data "./scripts/CPU_INSTALL.txt:install_state" \
+            --add-data "./scripts/__version__:." \
+            --add-data "./src/FreeScribe.client/whisper-assets:faster_whisper/assets" \
+            --add-data "./src/FreeScribe.client/markdown:markdown" \
+            --add-data "./src/FreeScribe.client/assets:assets" \
+            --name FreeScribe --noconsole --noconfirm ./src/FreeScribe.client/client.py
+
+      - name: Add launcher and package
+        run: |
+          cp scripts/linux/run-freescribe.sh scripts/linux/README.txt dist/FreeScribe/
+          chmod +x dist/FreeScribe/run-freescribe.sh
+          tar -czf dist/FreeScribe_linux_x86_64.tar.gz -C dist FreeScribe
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FreeScribe_linux_x86_64.tar.gz
+          path: dist/FreeScribe_linux_x86_64.tar.gz
+
   create-release:
     runs-on: ubuntu-latest
-    needs: [build-windows, build-macos-intel, build-macos-arm]
+    needs: [build-windows, build-macos-intel, build-macos-arm, build-linux]
     permissions:
       contents: write
     steps:
@@ -181,6 +234,11 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: FreeScribeInstaller_arm64.pkg
+
+      - name: Download Linux Build
+        uses: actions/download-artifact@v4
+        with:
+          name: FreeScribe_linux_x86_64.tar.gz
 
       - name: Check if alpha or RC release
         id: check_alpha
@@ -211,3 +269,4 @@ jobs:
             FreeScribeInstaller_x86_64.pkg
             FreeScribeInstaller_arm64.pkg
             FreeScribeInstaller_windows.exe
+            FreeScribe_linux_x86_64.tar.gz
