@@ -90,7 +90,8 @@ class FormFillWindow:
                  font=Theme.font("small"), anchor="w").pack(fill="x", pady=(Theme.px(2), 0))
 
         if self.talk is not None:
-            self.talk_panel = TalkPanel(self.window, self.talk, on_values=self.apply_values)
+            self.talk_panel = TalkPanel(self.window, self.talk, on_values=self.apply_values,
+                                        on_state=self._talk_state_changed)
             self.talk_panel.frame.pack(fill="x", padx=pad, pady=(Theme.px(12), 0))
 
         notice = tk.Frame(self.window, bg=Palette.WARNING_SOFT, highlightthickness=1,
@@ -128,8 +129,9 @@ class FormFillWindow:
                                                                 before=self.scroll)
         self.open_after = tk.BooleanVar(value=True)
         ttk.Checkbutton(footer, text="Open the PDF after saving", variable=self.open_after).pack(side="left")
-        Button(footer, text="Save filled PDF…", variant="primary", icon_name="download",
-               command=self.save).pack(side="right")
+        self.save_button = Button(footer, text="Save filled PDF…", variant="primary", icon_name="download",
+                                  command=self.save)
+        self.save_button.pack(side="right")
         Button(footer, text="Cancel", variant="neutral", command=self.close).pack(
             side="right", padx=(0, Theme.px(8)))
 
@@ -175,6 +177,11 @@ class FormFillWindow:
     def _update_count(self):
         filled = sum(1 for row in self.rows if row.value())
         self.count_label.configure(text=f"{filled} of {len(self.rows)} fields have a value")
+
+    def _talk_state_changed(self, state):
+        """No saving half way through: the form is filled when talking is done."""
+        if hasattr(self, "save_button"):
+            self.save_button.set_enabled(state == "idle")
 
     # ------------------------------------------------------------------ actions
     def apply_values(self, values):
@@ -243,12 +250,14 @@ class TalkPanel:
     - ``cancel()``: stop and throw the recording away
     """
 
-    HINT = ("Say the details for this form in your own words, for example “off work from March 3 to "
-            "March 10, light duties after that, no lifting over 10 kilograms”. Then choose Transcribe and fill.")
+    HINT = ("Press Start talking and say the details for this form in your own words, for example “off work "
+            "from March 3 to March 10, light duties after that, no lifting over 10 kilograms”. Then press "
+            "Stop and fill form. You can check and change every field before saving.")
 
-    def __init__(self, parent, talk, on_values):
+    def __init__(self, parent, talk, on_values, on_state=None):
         self.talk = talk
         self.on_values = on_values
+        self.on_state = on_state
         self.state = "idle"       # idle, recording, working
         bg = Palette.PRIMARY_SOFT
         self.frame = tk.Frame(parent, bg=bg)
@@ -298,16 +307,19 @@ class TalkPanel:
         self.status.configure(text=status, fg=Palette.DANGER if error else Palette.TEXT_MUTED)
         recording = state == "recording"
         if recording:
-            self.main_button.set(text="Transcribe and fill", icon_name="sparkle")
+            self.main_button.set(text="Stop and fill form", icon_name="stop", variant="danger")
             self.discard_button.pack(side="left", padx=(Theme.px(6), 0), after=self.main_button)
             self.meter.pack(side="left", padx=(Theme.px(12), 0), after=self.discard_button)
             self.time_label.pack(side="left", padx=(Theme.px(8), 0), after=self.meter)
         else:
-            self.main_button.set(text="Talk again" if self.said_text() else "Start talking", icon_name="mic")
+            self.main_button.set(text="Talk again" if self.said_text() else "Start talking", icon_name="mic",
+                                 variant="primary")
             for widget in (self.discard_button, self.meter, self.time_label):
                 widget.pack_forget()
         self.main_button.set_enabled(state != "working")
         self.refill_button.set_enabled(state == "idle")
+        if callable(self.on_state):
+            self.on_state(state)
 
     def _main_action(self):
         if self.state == "idle":
@@ -321,7 +333,7 @@ class TalkPanel:
         except Exception as error:
             self._set_state("idle", str(error), error=True)
             return
-        self._set_state("recording", "Listening…")
+        self._set_state("recording", "Listening… press Stop and fill form when you are done.")
         self._tick()
 
     def _tick(self):
@@ -362,8 +374,12 @@ class TalkPanel:
             return
         changed = self.on_values(values)
         filled = sum(1 for value in values.values() if value)
-        self._set_state("idle", f"Filled {filled} field{'s' if filled != 1 else ''} from what you said"
-                        + ("" if changed else " (nothing new)") + ". Check them before saving.")
+        if filled:
+            self._set_state("idle", f"Filled {filled} field{'s' if filled != 1 else ''} from what you said"
+                            + ("" if changed else " (nothing new)") + ". Check them, then Save filled PDF.")
+        else:
+            self._set_state("idle", "No field could be filled from what you said. Edit the text above and press "
+                                    "Fill again, or fill the fields yourself.", error=True)
 
     def _failed(self, message):
         if self.frame.winfo_exists():

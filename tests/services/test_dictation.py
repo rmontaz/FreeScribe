@@ -55,6 +55,6 @@ def test_wav_bytes():
 
 def test_dictation_comes_first_in_the_form_source():
     source = compose_source(title="Maria", note="A: strain", dictation="Off work March 3 to 10.")
-    assert source.index("Dictated by the clinician") < source.index("Clinician's note")
+    assert source.index("What the clinician said for this form") < source.index("Clinician's note")
     assert "Off work March 3 to 10." in source
-    assert "Dictated" not in compose_source(note="x")
+    assert "clinician said" not in compose_source(note="x")

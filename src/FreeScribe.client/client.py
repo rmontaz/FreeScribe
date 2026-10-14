@@ -2046,7 +2046,9 @@ def _ask_form_values(asked, source, mapping, form_title, cancel_event=None, prog
     """Asks the model for ``asked`` fields from ``source``; returns ({field name: value}, problems)."""
     values, problems = {}, []
     done = 0
-    for group, prompt in form_filler.build_prompts(asked, source, form_title):
+    local = bool(app_settings.editable_settings.get(SettingsKeys.LOCAL_LLM.value, False))
+    per_prompt = form_filler.FIELDS_PER_PROMPT_LOCAL if local else form_filler.FIELDS_PER_PROMPT
+    for group, prompt in form_filler.build_prompts(asked, source, form_title, per_prompt=per_prompt):
         if cancel_event is not None and cancel_event.is_set():
             break
         if progress is not None:

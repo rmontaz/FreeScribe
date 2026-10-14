@@ -269,3 +269,10 @@ def test_third_party_notices_cover_the_pdf_libraries():
         assert version in notices, f"{package} {version} is not in the third-party notices"
     assert "Mathieu Fenniak" in notices and "Artifex Software" in notices
     assert "Redistributions in binary form must reproduce" in notices
+
+
+def test_dictation_heading_is_never_an_answer():
+    from services.form_filler import DICTATION_HEADING, FormField, TEXT, compose_source, normalize
+    field = FormField(name="comments", label="Comments", kind=TEXT, multiline=True)
+    assert DICTATION_HEADING in compose_source(dictation="Off work for a week.")
+    assert normalize(field, DICTATION_HEADING + " Off work for a week.") == "Off work for a week."

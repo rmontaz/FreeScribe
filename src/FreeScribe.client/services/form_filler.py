@@ -50,6 +50,9 @@ _FF_RADIO = 1 << 15
 _FF_PUSHBUTTON = 1 << 16
 
 FIELDS_PER_PROMPT = 16
+# A small model on this computer answers more accurately a few fields at a time
+FIELDS_PER_PROMPT_LOCAL = 6
+DICTATION_HEADING = "What the clinician said for this form:"
 
 # Replies that mean "nothing to put here"
 _EMPTY_ANSWERS = {
@@ -575,8 +578,7 @@ def compose_source(title: str = "", note: str = "", context: str = "", transcrip
         head.append(f"Session title (often the patient's name): {title.strip()}")
     parts = ["\n".join(head)]
     if dictation.strip():
-        parts.append("Dictated by the clinician for this form (use this first; it overrides anything "
-                     f"below):\n{dictation.strip()}")
+        parts.append(f"{DICTATION_HEADING}\n{dictation.strip()}")
     if note.strip():
         parts.append(f"Clinician's note:\n{note.strip()}")
     if context.strip():
@@ -618,7 +620,8 @@ def build_prompts(fields: Sequence[FormField], source: str, form_title: str = ""
             "- Write only what each field asks for, as briefly as on a paper form. "
             "Never copy the whole note into a field.\n"
             "- When a line has several fields (for example a date range \"from … to\"), "
-            "give each field only its own part.\n\n"
+            "give each field only its own part.\n"
+            "- What the clinician said for this form, when given, comes first.\n\n"
             f"Visit information:\n<<<\n{source}\n>>>\n\n"
             "Fields:\n" + "\n".join(lines) + "\n\n"
             "Reply with only a JSON object that maps each field number to its value, for example "
@@ -700,6 +703,9 @@ def normalize(field_: FormField, answer: str) -> str:
     blank when nothing matches well.
     """
     answer = (answer or "").strip().strip('"').strip()
+    # A copied heading from the visit information is not an answer
+    answer = re.sub(r"^(?:what the clinician said for this form|dictated by the clinician[^:]*|visit information"
+                    r"|date of visit|clinician's note)\s*:\s*", "", answer, flags=re.IGNORECASE).strip()
     # Placeholders the model made up (real ones were already put back by restore())
     answer = re.sub(r"\{\{[^{}]*\}\}|\[(?:[A-Z][A-Za-z ]*|insert[^\]]*)\]", "", answer).strip(" ,;:-")
     if answer.lower().rstrip(".") in _EMPTY_ANSWERS:

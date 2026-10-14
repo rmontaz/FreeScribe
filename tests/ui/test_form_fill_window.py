@@ -166,7 +166,8 @@ def test_blank_form_offers_talk_to_fill(root, blank_window):
     win.talk_panel.main_button.invoke()                 # start talking
     root.update()
     assert win.talk_panel.state == "recording"
-    assert win.talk_panel.main_button._text == "Transcribe and fill"
+    assert win.talk_panel.main_button._text == "Stop and fill form"
+    assert not win.save_button.enabled                      # no saving half way
     win.talk_panel.main_button.invoke()                 # transcribe and fill
     root.update()
     r = rows(win)
