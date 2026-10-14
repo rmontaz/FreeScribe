@@ -651,3 +651,19 @@ def test_misheard_drug_names_are_underlined_and_can_be_fixed(root, workspace):
     ignore = next(i for i in workspace.note.flag_items(0) if i and i["label"].endswith("is right"))
     ignore["command"]()
     assert workspace.note.flags() == []
+
+
+def test_note_missing_a_negative_offers_to_add_it(root, workspace):
+    type_into(root, workspace.transcript, "Any chest pain? No. Any fever? No. Cough? Yes, for two weeks.")
+    workspace.transcript.flush_change()
+    workspace.apply_note(workspace.current.id, "Subjective:\nCough for two weeks. Denies chest pain.\n\nPlan:\nRest.")
+    pump(root)
+    assert workspace.warning_kind == "negatives" and "fever" in workspace.banner_label.cget("text")
+    assert workspace.banner_action.winfo_manager() == "pack"
+    workspace.banner_action.invoke()
+    pump(root)
+    assert "Denies (from the transcript): fever." in workspace.current.note
+    assert workspace.banner.winfo_manager() == ""
+    workspace.apply_note(workspace.current.id, workspace.current.note)   # nothing missing now
+    pump(root)
+    assert workspace.banner.winfo_manager() == ""

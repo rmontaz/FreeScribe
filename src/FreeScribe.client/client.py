@@ -75,7 +75,7 @@ from utils.network.openai_client import OpenAIClient
 from urllib.parse import urlparse
 from UI.Theme import Theme
 from UI.Workspace import Workspace
-from services.sessions import (SessionStore, DETAIL_LEVELS, DEFAULT_DETAIL_LEVEL, SPEAKER_INSTRUCTION, compose_source,
+from services.sessions import (SessionStore, DETAIL_LEVELS, DEFAULT_DETAIL_LEVEL, compose_source,
                                compose_revision_prompt)
 from services import form_filler
 from UI.FormFillWindow import FormFillWindow
@@ -1664,7 +1664,7 @@ def generate_note(formatted_message, cancel_event):
         summary = None
         current_prompt_info = NoteStyleSelector.get_current_prompt_info()
         # The chosen level of detail is added to the template's closing instructions
-        post_prompt = f"{current_prompt_info.post_prompt} {SPEAKER_INSTRUCTION} {get_detail_instruction()}".strip()
+        post_prompt = f"{current_prompt_info.post_prompt} {get_detail_instruction()}".strip()
         if use_aiscribe:
             # If pre-processing is enabled
             if app_settings.editable_settings[SettingsKeys.USE_PRE_PROCESSING.value]:

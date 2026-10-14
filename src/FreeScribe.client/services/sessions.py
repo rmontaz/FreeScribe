@@ -19,6 +19,7 @@ This module has no UI or encryption dependencies of its own: the caller passes
 This software is released under the AGPL-3.0 license.
 """
 
+import re
 import datetime as _dt
 import json
 import os
@@ -367,7 +368,8 @@ class SessionStore:
 CONTEXT_HEADING = "Additional context provided by the clinician (not spoken during the visit):"
 
 DETAIL_LEVELS = {
-    "Brief": "Keep the document brief: short phrases, only clinically essential points, no repetition.",
+    "Brief": "Keep the document brief: short phrases and only the clinically essential points, without "
+             "repetition. Still list every symptom the patient said no to as a pertinent negative.",
     "Standard": "",
     "Detailed": "Be thorough: include every clinically relevant detail that was mentioned, "
                 "with pertinent negatives, while staying strictly within what was said.",
@@ -375,14 +377,94 @@ DETAIL_LEVELS = {
 DEFAULT_DETAIL_LEVEL = "Standard"
 
 
-# Transcripts carry no speaker labels; this keeps the note from crediting the clinician's
-# questions to the patient (a question about chest pain is not chest pain).
-SPEAKER_INSTRUCTION = (
-    "The transcript is a conversation between the clinician and the patient, sometimes with others such as a "
-    "family member, and has no speaker labels. Work out who said what from the context: the clinician usually "
-    "asks questions and explains, the patient describes symptoms and history. Record a symptom as present only "
-    "when the patient confirms it, not when the clinician only asks about it."
-)
+_SENTENCE = re.compile(r"[^.?!\n]+[.?!]?")
+_NO_ANSWER = re.compile(r"^\s*(no|nope|none|never|not really|nah|no,? (?:none|never|not at all))\b[\s,.!]*", re.IGNORECASE)
+_WELLNESS = re.compile(r"\b(okay|ok|alright|all right|well|fine|good|better|normal|enough|able|managing|coping)\b",
+                       re.IGNORECASE)
+_NO_BUT = re.compile(r"^\s*no\b[\s,]*(but|except|only|just|well)\b", re.IGNORECASE)
+
+
+def find_denials(transcript: str, limit: int = 15) -> List[str]:
+    """
+    Questions in ``transcript`` that the patient answered with a plain "no"
+    ("Any chest pain?" followed by "No."). A "no, but ..." is left out because it
+    is not a clean negative. The note prompt lists these so a small model does not
+    drop them.
+    """
+    sentences = [m.group(0).strip() for m in _SENTENCE.finditer(transcript or "") if m.group(0).strip()]
+    found = []
+    for question, answer in zip(sentences, sentences[1:]):
+        if not question.endswith("?") or len(question) > 140:
+            continue
+        # "Are you sleeping okay?" - "No" is a problem, not a denial
+        if _WELLNESS.search(question):
+            continue
+        if _NO_ANSWER.match(answer) and not _NO_BUT.match(answer):
+            if question not in found:
+                found.append(question)
+        if len(found) >= limit:
+            break
+    return found
+
+
+_QUESTION_LEAD = re.compile(
+    r"^(?:and\s+|so\s+|okay,?\s+|ok,?\s+)?(?:(?:do|did|have|has|are|were|is|was)\s+(?:you|there|it)\s+"
+    r"(?:had\s+|have\s+|having\s+|noticed\s+|been\s+|get\s+|got\s+|getting\s+|feel\s+|felt\s+)?)?"
+    r"(?:any\s+|anything\s+like\s+)?", re.IGNORECASE)
+_STOP = {"any", "anything", "anywhere", "you", "your", "with", "when", "have", "had", "been", "from", "that", "this",
+         "there", "like", "about", "some", "ever", "recently", "lately", "today", "the", "and", "for", "are", "did"}
+
+
+def denial_phrase(question: str) -> str:
+    """'Any blood when you cough?' -> 'blood when coughing'-style short phrase for the note."""
+    phrase = _QUESTION_LEAD.sub("", question.strip().rstrip("?").strip())
+    phrase = re.sub(r"\b(?:anywhere|at all|lately|recently)\b", "", phrase, flags=re.IGNORECASE)
+    # "when you cough" -> "when coughing"
+    phrase = re.sub(r"\bwhen you (\w+)\b",
+                    lambda m: "when " + (m.group(1)[:-1] if m.group(1).endswith("e") else m.group(1)) + "ing",
+                    phrase, flags=re.IGNORECASE)
+    phrase = re.sub(r"\byour\b", "their", phrase, flags=re.IGNORECASE)
+    phrase = re.sub(r"\byou\b", "the patient", phrase, flags=re.IGNORECASE)
+    phrase = re.sub(r"\s+", " ", phrase).strip(" ,")
+    return phrase[:1].lower() + phrase[1:] if phrase else question.strip()
+
+
+def _key_words(text: str) -> List[str]:
+    return [w for w in re.findall(r"[a-z]{4,}", text.lower()) if w not in _STOP]
+
+
+def missing_denials(note: str, transcript: str) -> List[str]:
+    """
+    Things the patient said no to that the note does not mention at all, as short
+    phrases ("chest pain", "blood when the patient cough"). Small models sometimes
+    drop pertinent negatives; the clinician is offered these to add.
+    """
+    note_words = set(_key_words(note or ""))
+    missing = []
+    for question in find_denials(transcript):
+        words = _key_words(denial_phrase(question))
+        # Mentioned when one of its main words is in the note (stems: "vomit" in "vomiting")
+        if words and not any(w in note_words or any(n.startswith(w[:5]) for n in note_words) for w in words):
+            missing.append(denial_phrase(question))
+    return missing
+
+
+def add_denials_to_note(note: str, phrases: List[str]) -> str:
+    """Adds 'Denies: ...' after the Subjective section (or at the end when there is none)."""
+    if not phrases:
+        return note
+    line = "Denies (from the transcript): " + "; ".join(phrases) + "."
+    lines = (note or "").split("\n")
+    start = next((i for i, l in enumerate(lines) if re.match(r"^\W*(subjective|history|hpi)\b", l, re.IGNORECASE)), None)
+    if start is None:
+        return (note.rstrip() + "\n\n" + line) if note.strip() else line
+    end = next((i for i in range(start + 1, len(lines))
+                if re.match(r"^\W*(objective|exam|physical|assessment|plan)\b", lines[i], re.IGNORECASE)), len(lines))
+    insert_at = end
+    while insert_at > start + 1 and not lines[insert_at - 1].strip():
+        insert_at -= 1
+    lines.insert(insert_at, line)
+    return "\n".join(lines)
 
 
 def compose_source(transcript: str, context: str = "") -> str:

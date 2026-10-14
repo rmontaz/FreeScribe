@@ -32,7 +32,7 @@ from UI.Widgets.Controls import (Button, Chip, LevelMeter, PlaceholderEntry, Rou
                                  Tabs, TextArea, Toast, Tooltip, popup_menu, rounded_image)
 from services import export as exporter
 from services.sessions import (DEFAULT_DETAIL_LEVEL, DETAIL_LEVELS, Document, Session, SessionStore,
-                               format_clock, format_duration)
+                               add_denials_to_note, format_clock, format_duration, missing_denials)
 from utils.log_config import logger
 
 DISCLAIMER = "Review every note before use. AI-generated documentation can contain errors."
@@ -479,6 +479,7 @@ class Workspace:
         self.banner_label.pack(side="left", padx=(Theme.px(8), 0), fill="x", expand=True)
         self.banner_close = Button(inner, icon_name="close", variant="ghost", size="xs",
                                    surface=Palette.WARNING_SOFT, command=self.hide_warning)
+        self.banner_action = Button(inner, text="", variant="secondary", size="xs", surface=Palette.WARNING_SOFT)
         tk.Frame(self.banner, bg=Palette.WARNING_BORDER, height=1).pack(fill="x", side="bottom")
         self.banner_label.bind("<Configure>", lambda e: self.banner_label.configure(wraplength=max(200, e.width)))
 
@@ -961,6 +962,7 @@ class Workspace:
         self.note.set_text(session.note)
         self._rebuild_document_tabs()
         self._refresh_meta()
+        self.hide_warning(kind="negatives")
         if self.chat_visible():
             self.chat_panel.set_session(session)
         for session_id, row in self._rows.items():
@@ -1353,7 +1355,7 @@ class Workspace:
         else:
             self.busy_chip.pack_forget()
 
-    def show_warning(self, text, closable=False, kind="notice"):
+    def show_warning(self, text, closable=False, kind="notice", action_text=None, action=None):
         """Show a banner above the session. ``kind`` lets a caller clear only its own warning."""
         self.warning_text = text
         self.warning_kind = kind
@@ -1362,6 +1364,11 @@ class Workspace:
             self.banner_close.pack(side="right")
         else:
             self.banner_close.pack_forget()
+        if action_text and callable(action):
+            self.banner_action.set(text=action_text, command=action)
+            self.banner_action.pack(side="right", padx=(Theme.px(8), Theme.px(4)), before=self.banner_label)
+        else:
+            self.banner_action.pack_forget()
         self.banner.pack(fill="x", before=self.header)
 
     def hide_warning(self, kind=None):
@@ -1861,6 +1868,37 @@ class Workspace:
         if session is self.current:
             self.note.set_text(text, undoable=True)
             self.show_tab("note")
+            self.check_negatives()
         self._touch(session, was_empty)
         self._schedule_list_rebuild(delay=10)
         return session
+
+    def check_negatives(self):
+        """
+        Small models sometimes leave out what the patient said no to ("Any chest pain?" "No.").
+        Offer to add those to the note; nothing is added without the clinician's click.
+        """
+        session = self.current
+        self.hide_warning(kind="negatives")
+        if session is None or not session.note.strip():
+            return []
+        missing = missing_denials(session.note, session.transcript)
+        if missing:
+            count = len(missing)
+            listed = "; ".join(missing)
+            self.show_warning(f"The note doesn't mention {count} thing{'s' if count != 1 else ''} the patient "
+                              f"said no to: {listed}.", closable=True, kind="negatives",
+                              action_text="Add to note", action=lambda: self._add_negatives(session, missing))
+        return missing
+
+    def _add_negatives(self, session, phrases):
+        self.hide_warning(kind="negatives")
+        if session is not self.current or self.locked:
+            return
+        self.flush_edits()
+        text = add_denials_to_note(session.note, phrases)
+        session.note = text
+        self.note.set_text(text, undoable=True)
+        self.show_tab("note")
+        self._touch(session)
+        self.toast("Added to the note", action_text="Undo", action=self.note.undo, duration=6000)
