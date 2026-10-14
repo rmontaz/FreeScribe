@@ -391,7 +391,7 @@ class Workspace:
                                        tooltip="Ask the AI about the open session")
             self.chat_button.pack(fill="x")
         if "fill_form" in self.actions:
-            self.fill_form_button = ToolRow(tools, "Fill PDF form", "form", "#8A5A12", "#F5EBDA",
+            self.fill_form_button = ToolRow(tools, "Fill PDF form", "form", "#8A4B12", "#FFE3CF",
                                             command=lambda: self._act("fill_form") if not self.locked else None,
                                             tooltip="Fill a PDF form from the session, or by talking it through")
             self.fill_form_button.pack(fill="x")

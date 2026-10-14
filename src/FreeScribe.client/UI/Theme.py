@@ -23,49 +23,52 @@ from tkinter import ttk
 class Palette:
     """Colour tokens. Use these names rather than literal colours in UI code."""
 
+    # Peach & lime: warm cream and peach surfaces, a leaf-green accent and pastel lime highlights.
+    # Every text / background pair here meets WCAG AA (4.5:1) except TEXT_FAINT, used only for hints.
+
     # Surfaces
-    BG = "#FFFFFF"              # main working surface
-    SIDEBAR = "#F6F5F1"         # navigation rail
-    SURFACE = "#FAFAF8"         # quiet panels, input wells
-    RAISED = "#F1F0EB"          # neutral buttons, chips
-    HOVER = "#ECEAE4"           # hover on sidebar rows / neutral buttons
-    SELECTED = "#E4E1D9"        # selected sidebar row
-    PRESSED = "#DBD8CF"
+    BG = "#FFFCF9"              # main working surface (warm cream)
+    SIDEBAR = "#FCEFE6"         # navigation rail (soft peach)
+    SURFACE = "#FFF7F1"         # quiet panels, input wells
+    RAISED = "#FAE8DC"          # neutral buttons, chips
+    HOVER = "#F7E0D1"           # hover on sidebar rows / neutral buttons
+    SELECTED = "#F3D6C3"        # selected sidebar row
+    PRESSED = "#EDCAB4"
 
     # Lines
-    BORDER = "#E6E4DE"
-    BORDER_STRONG = "#CFCCC3"
+    BORDER = "#F1E1D6"
+    BORDER_STRONG = "#E0C6B5"
 
     # Text
-    TEXT = "#1B1F23"
-    TEXT_MUTED = "#636A72"
-    TEXT_FAINT = "#9499A0"
+    TEXT = "#2A2421"            # warm charcoal
+    TEXT_MUTED = "#6B5E57"
+    TEXT_FAINT = "#9A867C"
     TEXT_ON_PRIMARY = "#FFFFFF"
 
-    # Brand / primary action
-    PRIMARY = "#0F766E"
-    PRIMARY_HOVER = "#0C655E"
-    PRIMARY_PRESSED = "#0A544E"
-    PRIMARY_SOFT = "#E3F2EF"
-    PRIMARY_SOFT_HOVER = "#D2EAE5"
+    # Brand / primary action (leaf green, with pastel lime highlights)
+    PRIMARY = "#3E7B1E"
+    PRIMARY_HOVER = "#346A18"
+    PRIMARY_PRESSED = "#2B5A13"
+    PRIMARY_SOFT = "#E8F6CF"
+    PRIMARY_SOFT_HOVER = "#DCF0B8"
 
     # Status
-    DANGER = "#C4382C"
-    DANGER_HOVER = "#AA2E24"
-    DANGER_PRESSED = "#91261D"
-    DANGER_SOFT = "#FCEBE9"
-    WARNING = "#9A5B00"
-    WARNING_SOFT = "#FFF4D6"
-    WARNING_BORDER = "#F1D58A"
-    SUCCESS = "#1E8E4E"
-    INFO = "#2563A8"
-    INFO_SOFT = "#E8F0FB"
+    DANGER = "#CC4B37"          # warm coral red
+    DANGER_HOVER = "#B33F2D"
+    DANGER_PRESSED = "#983324"
+    DANGER_SOFT = "#FFE5DD"
+    WARNING = "#94590A"
+    WARNING_SOFT = "#FFF2D6"
+    WARNING_BORDER = "#F2D59A"
+    SUCCESS = "#4C9A2A"
+    INFO = "#376399"
+    INFO_SOFT = "#E8EFF9"
 
     # Overlays
-    TOAST_BG = "#23272B"
+    TOAST_BG = "#2E2723"
     TOAST_TEXT = "#FFFFFF"
-    DISABLED_BG = "#EFEEEA"
-    DISABLED_TEXT = "#A9ADB2"
+    DISABLED_BG = "#F5E9E0"
+    DISABLED_TEXT = "#B9A99F"
 
 
 # Type scale in points for Windows / Linux. macOS draws a point as one pixel,
