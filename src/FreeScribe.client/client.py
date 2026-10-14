@@ -1933,9 +1933,9 @@ def fill_form():
     """Fills a PDF form the user picks with information from the current session."""
     workspace.flush_edits()
     session = workspace.current
-    if session is None or not (session.transcript.strip() or session.note.strip() or session.context.strip()):
-        workspace.toast("There is nothing in this session to fill a form from yet", icon_name="info")
+    if session is None:
         return
+    has_content = bool(session.transcript.strip() or session.note.strip() or session.context.strip())
 
     pdf_path = filedialog.askopenfilename(title="Choose a PDF form to fill",
                                           filetypes=(("PDF forms", "*.pdf"),))
@@ -1947,6 +1947,11 @@ def fill_form():
         messagebox.showinfo("Fill PDF form", str(error))
         return
     fields = prepared.fields
+    if not has_content:
+        # Nothing for the AI to work from yet: open the form to be filled by hand
+        workspace.toast("This session is empty, so the form opens blank for you to fill in", icon_name="info")
+        _show_form_review(prepared, {}, session.title, session.id)
+        return
 
     source = form_filler.compose_source(
         title=session.title, note=session.note, context=session.context, transcript=session.transcript,

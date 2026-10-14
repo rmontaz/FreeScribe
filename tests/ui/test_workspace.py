@@ -441,9 +441,7 @@ def test_long_history_is_listed_a_page_at_a_time(root, workspace):
 # ------------------------------------------------------------------ PDF forms
 def test_fill_pdf_form_has_its_own_sidebar_button(root, workspace):
     from UI.Widgets import Controls
-    assert not workspace.fill_form_button.enabled                  # nothing in the session yet
-    type_into(root, workspace.context, "Works in a warehouse.")      # no transcript needed
-    assert workspace.fill_form_button.enabled
+    assert workspace.fill_form_button.enabled                      # usable even before anything is recorded
     workspace.fill_form_button.invoke()
     assert ("fill_form", ()) in workspace.calls
     type_into(root, workspace.transcript, "Doctor: hello.")

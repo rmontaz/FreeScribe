@@ -1093,8 +1093,8 @@ class Workspace:
         self.generate_button.set_enabled(idle and has_transcript)
         self.add_doc_button.set_enabled(idle and has_transcript)
         if hasattr(self, "fill_form_button"):
-            has_content = has_transcript or bool(session.note.strip() or session.context.strip())
-            self.fill_form_button.set_enabled(idle and has_content)
+            # Always available when idle: an empty session opens the form to fill by hand
+            self.fill_form_button.set_enabled(idle)
         self.template_button.set_enabled(idle)
         has_text = bool(self.current_page().get_text().strip())
         self.copy_button.set_enabled(has_text)
