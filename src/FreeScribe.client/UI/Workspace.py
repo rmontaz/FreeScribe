@@ -23,8 +23,10 @@ import tkinter as tk
 import tkinter.messagebox as messagebox
 from tkinter import filedialog
 
+from UI.ChatWindow import ChatPanel
 from UI.Icons import icon, logo
 from UI.NoteStyleSelector import NoteStyleSelector
+from UI.StartScreen import RecordingBanner, StartScreen
 from UI.Theme import Palette, Theme
 from UI.Widgets.Controls import (Button, Chip, LevelMeter, PlaceholderEntry, RoundedFrame, ScrollFrame,
                                  Tabs, TextArea, Toast, Tooltip, popup_menu, rounded_image)
@@ -36,6 +38,8 @@ from utils.log_config import logger
 DISCLAIMER = "Review every note before use. AI-generated documentation can contain errors."
 ASK_PLACEHOLDER = "Ask FreeScribe to edit this note, e.g. “make the plan more concise”"
 ASK_PLACEHOLDER_EMPTY = "Create a note first, then ask for edits here"
+EDIT_SUGGESTIONS = ("Make it more concise", "Use full sentences", "Add safety-netting advice",
+                    "Write it for the patient")
 TRANSCRIPT_PLACEHOLDER = ("Start transcribing and the conversation will appear here.\n"
                           "You can also paste or type a transcript, then choose Create note.")
 CONTEXT_PLACEHOLDER = ("Add anything that was not said aloud and should inform the note: relevant history, "
@@ -61,23 +65,95 @@ def _ellipsize(text, font, max_width):
     return text[:low].rstrip() + "…"
 
 
+def session_status(session, recording=False):
+    """The short status shown on a session in the sidebar: (text, background, text colour) or None."""
+    if recording:
+        return "Recording", Palette.DANGER_SOFT, Palette.DANGER
+    if session.note.strip():
+        return "Note ready", Palette.PRIMARY_SOFT, Palette.PRIMARY_PRESSED
+    if session.transcript.strip():
+        return "Transcript", Palette.RAISED, Palette.TEXT_MUTED
+    if session.context.strip() or session.documents:
+        return "Draft", Palette.RAISED, Palette.TEXT_MUTED
+    return None
+
+
+class ToolRow(tk.Canvas):
+    """A sidebar tool: a coloured icon tile and a label, the whole row clickable."""
+
+    HEIGHT = 40
+
+    def __init__(self, parent, text, icon_name, tint, tile, command, tooltip=None, surface=Palette.SIDEBAR):
+        super().__init__(parent, bg=surface, highlightthickness=0, bd=0, height=Theme.px(self.HEIGHT),
+                         cursor="hand2", takefocus=1)
+        self.text, self.icon_name, self.tint, self.tile = text, icon_name, tint, tile
+        self._command = command
+        self.enabled = True
+        self._hover = False
+        self._font = Theme.font("base", "medium")
+        self._bg_item = self.create_image(0, 0, anchor="nw")
+        self._tile_item = self.create_image(Theme.px(8), Theme.px(self.HEIGHT) / 2, anchor="w")
+        self._icon_item = self.create_image(Theme.px(8 + 14), Theme.px(self.HEIGHT) / 2, anchor="center")
+        self._text_item = self.create_text(Theme.px(8 + 28 + 10), Theme.px(self.HEIGHT) / 2, anchor="w",
+                                           font=self._font, text=text)
+        self.bind("<Configure>", lambda e: self.refresh())
+        self.bind("<Enter>", lambda e: self._set_hover(True))
+        self.bind("<Leave>", lambda e: self._set_hover(False))
+        self.bind("<Button-1>", lambda e: self.invoke())
+        self.bind("<Key-Return>", lambda e: self.invoke())
+        self.bind("<Key-space>", lambda e: self.invoke())
+        if tooltip:
+            Tooltip(self, tooltip)
+        self.refresh()
+
+    def invoke(self):
+        if self.enabled and callable(self._command):
+            self._command()
+
+    def set_enabled(self, enabled):
+        enabled = bool(enabled)
+        if enabled != self.enabled:
+            self.enabled = enabled
+            self.configure(cursor="hand2" if enabled else "arrow")
+            self.refresh()
+
+    def _set_hover(self, hover):
+        self._hover = hover and self.enabled
+        self.refresh()
+
+    def refresh(self):
+        width, height = max(self.winfo_width(), 2), Theme.px(self.HEIGHT)
+        self._image = rounded_image(width, height, Theme.px(8), Palette.HOVER) if self._hover else ""
+        self.itemconfigure(self._bg_item, image=self._image)
+        tile = Theme.px(28)
+        self._tile = rounded_image(tile, tile, Theme.px(7), self.tile if self.enabled else Palette.DISABLED_BG)
+        self.itemconfigure(self._tile_item, image=self._tile)
+        self.itemconfigure(self._icon_item, image=icon(self.icon_name, 15,
+                                                       self.tint if self.enabled else Palette.DISABLED_TEXT))
+        self.itemconfigure(self._text_item, fill=Palette.TEXT if self.enabled else Palette.DISABLED_TEXT)
+
+
 class SessionRow(tk.Canvas):
     """One session in the sidebar list."""
 
-    HEIGHT = 50
+    HEIGHT = 54
 
-    def __init__(self, parent, session, on_select, on_menu, selected=False, surface=Palette.SIDEBAR):
+    def __init__(self, parent, session, on_select, on_menu, selected=False, surface=Palette.SIDEBAR,
+                 is_recording=None):
         super().__init__(parent, bg=surface, highlightthickness=0, bd=0, height=Theme.px(self.HEIGHT), cursor="hand2")
         self.session = session
         self._on_select, self._on_menu = on_select, on_menu
+        self._is_recording = is_recording or (lambda session: False)
         self.selected = selected
         self._hover = False
         self._enabled = True
         self._title_font = Theme.font("base", "medium")
         self._sub_font = Theme.font("small")
         self._bg_item = self.create_image(0, 0, anchor="nw")
-        self._title_item = self.create_text(Theme.px(12), Theme.px(17), anchor="w", font=self._title_font)
-        self._sub_item = self.create_text(Theme.px(12), Theme.px(35), anchor="w", font=self._sub_font)
+        self._title_item = self.create_text(Theme.px(12), Theme.px(19), anchor="w", font=self._title_font)
+        self._sub_item = self.create_text(Theme.px(12), Theme.px(37), anchor="w", font=self._sub_font)
+        self._pill_item = self.create_image(0, 0, anchor="e")
+        self._pill_text = self.create_text(0, 0, anchor="center", font=Theme.font("micro", "semibold"))
         self._menu_item = self.create_image(0, 0, anchor="e")
         self.bind("<Configure>", lambda e: self.refresh())
         self.bind("<Enter>", lambda e: self._set_hover(True))
@@ -120,18 +196,39 @@ class SessionRow(tk.Canvas):
         if width <= 1:
             return
         session = self.session
-        fill = Palette.SELECTED if self.selected else Palette.HOVER if self._hover else None
-        image = rounded_image(width, height - Theme.px(2), Theme.px(8), fill) if fill else ""
+        if self.selected:
+            # The open session reads as a card lifted off the sidebar
+            image = rounded_image(width, height - Theme.px(4), Theme.px(10), Palette.BG, outline=Palette.BORDER)
+        elif self._hover:
+            image = rounded_image(width, height - Theme.px(4), Theme.px(10), Palette.HOVER)
+        else:
+            image = ""
         self._image = image
         self.itemconfigure(self._bg_item, image=image)
-        self.coords(self._bg_item, 0, Theme.px(1))
+        self.coords(self._bg_item, 0, Theme.px(2))
 
         reserve = Theme.px(34) if self._hover else Theme.px(12)
+        status = None if self._hover else session_status(session, self._is_recording(session))
+        if status:
+            text, pill_bg, pill_fg = status
+            pill_font = Theme.font("micro", "semibold")
+            pill_w, pill_h = pill_font.measure(text) + Theme.px(14), Theme.px(18)
+            self._pill = rounded_image(pill_w, pill_h, pill_h // 2, pill_bg)
+            right = width - Theme.px(10)
+            self.itemconfigure(self._pill_item, image=self._pill, state="normal")
+            self.coords(self._pill_item, right, Theme.px(19))
+            self.itemconfigure(self._pill_text, text=text, fill=pill_fg, state="normal")
+            self.coords(self._pill_text, right - pill_w / 2, Theme.px(19))
+            title_width = width - Theme.px(12) - pill_w - Theme.px(18)
+        else:
+            self.itemconfigure(self._pill_item, state="hidden")
+            self.itemconfigure(self._pill_text, state="hidden")
+            title_width = width - Theme.px(12) - reserve
         text_width = width - Theme.px(12) - reserve
         untitled_blank = session.is_empty
         title = "New session" if untitled_blank else session.display_title
         title_color = Palette.TEXT if self._enabled else Palette.TEXT_MUTED
-        self.itemconfigure(self._title_item, text=_ellipsize(title, self._title_font, text_width), fill=title_color)
+        self.itemconfigure(self._title_item, text=_ellipsize(title, self._title_font, title_width), fill=title_color)
         subtitle = session.subtitle()
         if session.template and session.note.strip():
             subtitle += f"  ·  {session.template.replace(' - Default', '')}"
@@ -183,6 +280,7 @@ class Workspace:
         self._rec_mark = None
         self._busy_phase = 0
         self._status_rows = []
+        self.chat_panel = None
 
         self._build()
         self.select_session(self._blank_session())
@@ -222,7 +320,9 @@ class Workspace:
         self.full.pack(fill="both", expand=True)
 
         self._build_sidebar(self.full)
-        tk.Frame(self.full, bg=Palette.BORDER, width=1).pack(side="left", fill="y")
+        self._build_rail(self.full)
+        self._sidebar_border = tk.Frame(self.full, bg=Palette.BORDER, width=1)
+        self._sidebar_border.pack(side="left", fill="y")
 
         self.main = tk.Frame(self.full, bg=Palette.BG)
         self.main.pack(side="left", fill="both", expand=True)
@@ -233,6 +333,8 @@ class Workspace:
 
         self._build_banner(self.main)
         self._build_header(self.main)
+        self.rec_banner = RecordingBanner(self.main, on_pause=lambda: self._act("toggle_pause"),
+                                          on_stop=lambda: self._act("toggle_recording"))
         self._build_tabs(self.main)
         self._build_footer(self.main)
         self._build_pages(self.main)
@@ -258,13 +360,13 @@ class Workspace:
                                      tooltip="Compact recorder that stays on top")
         self.compact_button.pack(side="right")
 
-        self.new_button = Button(side, text="New session", icon_name="plus", variant="secondary", stretch=True,
-                                 align="left", surface=bg, command=self.new_session,
+        self.new_button = Button(side, text="New session", icon_name="plus", variant="primary", size="lg",
+                                 stretch=True, surface=bg, command=self.new_session,
                                  tooltip="Start a new session (Ctrl+N)")
         self.new_button.pack(fill="x", padx=Theme.px(14))
 
         search = RoundedFrame(side, fill=Palette.BG, outline=Palette.BORDER, radius=8, padx=10, pady=6, surface=bg)
-        search.pack(fill="x", padx=Theme.px(14), pady=(Theme.px(10), Theme.px(8)))
+        search.pack(fill="x", padx=Theme.px(14), pady=(Theme.px(10), Theme.px(4)))
         tk.Label(search.body, image=icon("search", 15, Palette.TEXT_FAINT), bg=Palette.BG).pack(side="left")
         self.search_entry = PlaceholderEntry(search.body, placeholder="Search sessions", bg=Palette.BG,
                                              on_change=self._on_search, font=Theme.font("base"))
@@ -273,56 +375,97 @@ class Workspace:
         self.search_entry.bind("<FocusOut>", lambda e: search.set_outline(Palette.BORDER), add="+")
         self.search_entry.bind("<Escape>", lambda e: (self.search_entry.set_value(""), self._on_search("")))
 
+        # Tools sit at the top where they are easy to find
+        tools = tk.Frame(side, bg=bg)
+        tools.pack(fill="x", padx=Theme.px(8), pady=(Theme.px(8), 0))
+        self.tools_frame = tools
+        if any(name in self.actions for name in ("open_chat", "fill_form", "open_eform_mapper")):
+            tk.Label(tools, text="TOOLS", bg=bg, fg=Palette.TEXT_FAINT, font=Theme.font("micro", "semibold"),
+                     anchor="w").pack(fill="x", padx=Theme.px(4), pady=(Theme.px(4), Theme.px(2)))
+        if "open_chat" in self.actions:
+            self.chat_button = ToolRow(tools, "Chat about this visit", "chat", Palette.PRIMARY, Palette.PRIMARY_SOFT,
+                                       command=lambda: self._act("open_chat"),
+                                       tooltip="Ask the AI about the open session")
+            self.chat_button.pack(fill="x")
+        if "fill_form" in self.actions:
+            self.fill_form_button = ToolRow(tools, "Fill PDF form", "form", "#8A5A12", "#F5EBDA",
+                                            command=lambda: self._act("fill_form") if not self.locked else None,
+                                            tooltip="Fill a PDF form from the session, or by talking it through")
+            self.fill_form_button.pack(fill="x")
+        if "open_eform_mapper" in self.actions:
+            self.mapper_button = ToolRow(tools, "eForm mapper", "mapper", Palette.INFO, Palette.INFO_SOFT,
+                                         command=lambda: self._act("open_eform_mapper"),
+                                         tooltip="Map an OSCAR eForm from a PDF, in your web browser")
+            self.mapper_button.pack(fill="x")
+
         # Footer is packed before the list so the list takes whatever height is left.
         footer = tk.Frame(side, bg=bg)
         footer.pack(side="bottom", fill="x")
         tk.Frame(footer, bg=Palette.BORDER, height=1).pack(fill="x")
 
-        nav = tk.Frame(footer, bg=bg)
-        nav.pack(fill="x", padx=Theme.px(8), pady=(Theme.px(8), Theme.px(2)))
-        if "open_chat" in self.actions:
-            self.chat_button = Button(nav, text="Chat", icon_name="sparkle", variant="ghost-strong", size="sm",
-                                      stretch=True, align="left", surface=bg,
-                                      tooltip="Chat with the AI about the open session",
-                                      command=lambda: self._act("open_chat"))
-            self.chat_button.pack(fill="x")
-        if "fill_form" in self.actions:
-            self.fill_form_button = Button(nav, text="Fill PDF form", icon_name="edit", variant="ghost-strong",
-                                           size="sm", stretch=True, align="left", surface=bg,
-                                           tooltip="Fill a PDF form from the open session",
-                                           command=lambda: self._act("fill_form") if not self.locked else None)
-            self.fill_form_button.pack(fill="x")
-        if "open_eform_mapper" in self.actions:
-            self.mapper_button = Button(nav, text="eForm mapper", icon_name="doc", variant="ghost-strong", size="sm",
-                                        stretch=True, align="left", surface=bg,
-                                        tooltip="Map an OSCAR eForm from a PDF, in your web browser",
-                                        command=lambda: self._act("open_eform_mapper"))
-            self.mapper_button.pack(fill="x")
-        self.settings_button = Button(nav, text="Settings", icon_name="settings", variant="ghost-strong", size="sm",
-                                      stretch=True, align="left", surface=bg,
-                                      command=lambda: self._act("open_settings"))
-        self.settings_button.pack(fill="x")
-        self.data_button = Button(nav, text="Manage data", icon_name="folder", variant="ghost-strong", size="sm",
-                                  stretch=True, align="left", surface=bg, command=self._open_data_menu)
-        self.data_button.pack(fill="x")
-        self.help_button = Button(nav, text="Help", icon_name="help", variant="ghost-strong", size="sm",
-                                  stretch=True, align="left", surface=bg, command=self._open_help_menu)
-        self.help_button.pack(fill="x")
-
-        self.status_frame = tk.Frame(footer, bg=bg)
-        self.status_frame.pack(fill="x", padx=Theme.px(18), pady=(Theme.px(8), Theme.px(2)))
-
-        self.storage_label = tk.Label(footer, bg=bg, fg=Palette.TEXT_FAINT, font=Theme.font("micro"),
+        # Details (model status, storage, version), shown when the status chip is clicked
+        self.details_frame = tk.Frame(footer, bg=bg)
+        self.status_frame = tk.Frame(self.details_frame, bg=bg)
+        self.status_frame.pack(fill="x", padx=Theme.px(18), pady=(Theme.px(10), Theme.px(2)))
+        self.storage_label = tk.Label(self.details_frame, bg=bg, fg=Palette.TEXT_MUTED, font=Theme.font("micro"),
                                       justify="left", anchor="w",
                                       wraplength=Theme.px(self.SIDEBAR_WIDTH - 36))
         self.storage_label.pack(fill="x", padx=Theme.px(18), pady=(Theme.px(6), 0))
-        tk.Label(footer, text=f"FreeScribe {self.version}".strip(), bg=bg, fg=Palette.TEXT_FAINT,
-                 font=Theme.font("micro"), anchor="w").pack(fill="x", padx=Theme.px(18),
-                                                            pady=(Theme.px(2), Theme.px(12)))
+        tk.Label(self.details_frame, text=f"FreeScribe {self.version}".strip(), bg=bg, fg=Palette.TEXT_FAINT,
+                 font=Theme.font("micro"), anchor="w").pack(fill="x", padx=Theme.px(18), pady=(Theme.px(2), 0))
+
+        nav = tk.Frame(footer, bg=bg)
+        nav.pack(fill="x", padx=Theme.px(10), pady=Theme.px(10))
+        self._sidebar_nav = nav
+        self.help_button = Button(nav, icon_name="help", variant="ghost-strong", size="sm", surface=bg,
+                                  command=self._open_help_menu, tooltip="Help")
+        self.help_button.pack(side="right")
+        self.settings_button = Button(nav, icon_name="settings", variant="ghost-strong", size="sm", surface=bg,
+                                      command=lambda: self._act("open_settings"), tooltip="Settings")
+        self.settings_button.pack(side="right")
+        self.data_button = Button(nav, icon_name="folder", variant="ghost-strong", size="sm", surface=bg,
+                                  command=self._open_data_menu, tooltip="Manage data")
+        self.data_button.pack(side="right")
+        self.status_chip = Chip(nav, text="Checking…", tone="neutral", dot=Palette.TEXT_FAINT, surface=bg,
+                                command=self.toggle_details, tooltip="Where speech and notes are processed")
+        self.status_chip.pack(side="left")
 
         self.session_list = ScrollFrame(side, bg=bg)
-        self.session_list.pack(fill="both", expand=True, padx=(Theme.px(8), Theme.px(3)))
+        self.session_list.pack(fill="both", expand=True, padx=(Theme.px(8), Theme.px(3)), pady=(Theme.px(4), 0))
         self.set_storage_mode(self.storing_locally)
+
+    def toggle_details(self):
+        """Show or hide the model status, storage note and version under the sidebar."""
+        if self.details_frame.winfo_manager():
+            self.details_frame.pack_forget()
+        else:
+            self.details_frame.pack(fill="x", before=self._sidebar_nav)
+
+    def _build_rail(self, parent):
+        """The narrow strip that stands in for the sidebar while a visit is transcribed."""
+        bg = Palette.SIDEBAR
+        rail = tk.Frame(parent, bg=bg, width=Theme.px(64))
+        rail.pack_propagate(False)
+        logo_image = logo(28)
+        if logo_image is not None:
+            tk.Label(rail, image=logo_image, bg=bg).pack(pady=(Theme.px(18), Theme.px(12)))
+        self.rail_button = Button(rail, icon_name="panel", variant="ghost-strong", size="md", surface=bg,
+                                  command=self.expand_sidebar, tooltip="Show sessions")
+        self.rail_button.pack()
+        self.rail = rail
+
+    def collapse_sidebar(self):
+        """Give the visit the room while it is transcribed."""
+        if self.rail.winfo_manager() or self.compact:
+            return
+        self.sidebar.pack_forget()
+        self.rail.pack(side="left", fill="y", before=self._sidebar_border)
+
+    def expand_sidebar(self):
+        if not self.rail.winfo_manager():
+            return
+        self.rail.pack_forget()
+        self.sidebar.pack(side="left", fill="y", before=self._sidebar_border)
 
     # ----------------------------------------------------------------- banner
     def _build_banner(self, parent):
@@ -346,6 +489,7 @@ class Workspace:
 
         right = tk.Frame(self.header, bg=bg)
         right.pack(side="right", anchor="n", padx=(Theme.px(16), 0))
+        self.header_actions = right
         self.record_menu_button = Button(right, icon_name="chevron-down", variant="primary", size="lg",
                                          command=self._open_record_menu, tooltip="More ways to start")
         self.record_menu_button.pack(side="right", padx=(Theme.px(2), 0))
@@ -358,6 +502,7 @@ class Workspace:
 
         left = tk.Frame(self.header, bg=bg)
         left.pack(side="left", fill="x", expand=True)
+        self._header_left = left
         self.title_entry = PlaceholderEntry(left, placeholder="Add patient details", bg=bg,
                                             font=Theme.font("display", "semibold"),
                                             on_change=self._on_title_change,
@@ -389,7 +534,7 @@ class Workspace:
     # ------------------------------------------------------------------- tabs
     def _build_tabs(self, parent):
         bg = Palette.BG
-        self.tabs = Tabs(parent, on_select=self._on_tab_selected, on_close=self._on_document_close, bg=bg)
+        self.tabs = Tabs(parent, on_select=self._on_tab_clicked, on_close=self._on_document_close, bg=bg)
         self.tabs.pack(fill="x", padx=(Theme.px(21), Theme.px(32)))
         self.tabs.add("context", "Context", icon_name="clipboard")
         self.tabs.add("transcript", "Transcript", icon_name="lines")
@@ -412,16 +557,23 @@ class Workspace:
         self.template_button = Button(actions, text="Template", icon_name="doc", trailing_icon="chevron-down",
                                       variant="secondary", size="sm", surface=bg,
                                       command=self._open_template_menu, tooltip="Note template and level of detail")
+        self.more_button = Button(actions, icon_name="dots", variant="ghost-strong", size="sm", surface=bg,
+                                  command=self._open_more_menu, tooltip="Copy or export")
         self._toolbar_level = 0
         self._layout_actions()
         self.tabs.bind("<Configure>", lambda e: self._fit_toolbar())
 
     def _layout_actions(self):
-        for button in (self.export_button, self.copy_button, self.generate_button, self.template_button):
+        for button in (self.export_button, self.copy_button, self.more_button, self.generate_button,
+                       self.template_button):
             button.pack_forget()
         pad = dict(pady=Theme.px(3))
-        self.export_button.pack(side="right", **pad)
-        self.copy_button.pack(side="right", padx=(0, Theme.px(2)), **pad)
+        if self._toolbar_level >= 3:
+            # Tight on room (for example with the chat open): Copy and Export move into a menu
+            self.more_button.pack(side="right", **pad)
+        else:
+            self.export_button.pack(side="right", **pad)
+            self.copy_button.pack(side="right", padx=(0, Theme.px(2)), **pad)
         for button in self._note_buttons():
             button.pack(side="right", padx=(0, Theme.px(8 if button is self.generate_button else 6)), **pad)
 
@@ -434,7 +586,19 @@ class Workspace:
         return [self.generate_button, self.template_button]
 
     def _toolbar_buttons(self):
+        if self._toolbar_level >= 3:
+            return [self.more_button] + self._note_buttons()
         return [self.export_button, self.copy_button] + self._note_buttons()
+
+    def _open_more_menu(self):
+        has_text = bool(self.current_page().get_text().strip())
+        popup_menu(self.more_button, [
+            {"label": "Copy", "command": self.copy_current, "enabled": has_text},
+            None,
+            {"label": "Export as Word (.docx)", "command": lambda: self.export_current(".docx"), "enabled": has_text},
+            {"label": "Export as PDF (.pdf)", "command": lambda: self.export_current(".pdf"), "enabled": has_text},
+            {"label": "Export as text (.txt)", "command": lambda: self.export_current(".txt"), "enabled": has_text},
+        ], align="right")
 
     # ------------------------------------------------------- transcribe only
     def notes_enabled(self) -> bool:
@@ -452,20 +616,29 @@ class Workspace:
     def _apply_note_mode(self):
         if not hasattr(self, "footer"):
             return
+        self._refresh_footer()
         if self.transcribe_only:
-            self.footer.pack_forget()
             self.add_doc_button.pack_forget()
             self.note.set_placeholder(NOTE_PLACEHOLDER_TRANSCRIBE_ONLY)
         else:
-            if not self.footer.winfo_manager():
-                self.footer.pack(side="bottom", fill="x", padx=Theme.px(32), pady=(Theme.px(6), Theme.px(12)),
-                                 before=self.pages)
             if not self.add_doc_button.winfo_manager():
                 self.add_doc_button.pack(side="left", pady=Theme.px(3))
             no_note = NoteStyleSelector.current_style == NoteStyleSelector.NO_NOTE_STYLE
             self.note.set_placeholder(NOTE_PLACEHOLDER_NO_NOTE if no_note else NOTE_PLACEHOLDER)
         self._layout_actions()
         self._refresh_toolbar()
+
+    def _refresh_footer(self):
+        """The edit bar shows only when there can be a note to edit."""
+        if not hasattr(self, "footer"):
+            return
+        start_screen = hasattr(self, "start_screen") and bool(self.start_screen.winfo_manager())
+        show = not self.transcribe_only and not self.is_recording and not start_screen
+        if show and not self.footer.winfo_manager():
+            self.footer.pack(side="bottom", fill="x", padx=Theme.px(32), pady=(Theme.px(6), Theme.px(12)),
+                             before=self.pages)
+        elif not show and self.footer.winfo_manager():
+            self.footer.pack_forget()
 
     def _apply_toolbar_level(self, level):
         """Set the toolbar labels: 0 = all labels, 1 = Copy/Export as icons, 2 = icons only."""
@@ -486,13 +659,23 @@ class Workspace:
         available = (self.tabs.winfo_width() - self.tabs.strip.winfo_reqwidth()
                      - self.tabs.trailing.winfo_reqwidth() - Theme.px(10))
         if self.tabs.winfo_width() <= 1:
-            self._apply_toolbar_level(0)
+            self._set_toolbar_level(0)
             return
-        for level in (0, 1, 2):
-            self._apply_toolbar_level(level)
+        self.tabs.set_compact(False)
+        for level in (0, 1, 2, 3, 4):
+            self._set_toolbar_level(min(level, 3))
+            if level == 4:
+                self.tabs.set_compact(True)
+                break
             needed = sum(button.winfo_reqwidth() for button in self._toolbar_buttons()) + Theme.px(20)
             if needed <= available:
                 break
+
+    def _set_toolbar_level(self, level):
+        moved = (level >= 3) != (self._toolbar_level >= 3)
+        self._apply_toolbar_level(level)
+        if moved:
+            self._layout_actions()
 
     # ------------------------------------------------------------------ pages
     def _build_pages(self, parent):
@@ -505,12 +688,127 @@ class Workspace:
                                 on_change=lambda value: self._update_field("context", value))
         self.transcript = TextArea(self.pages, placeholder=TRANSCRIPT_PLACEHOLDER, padx=32,
                                    on_change=lambda value: self._update_field("transcript", value))
-        self.note = TextArea(self.pages, placeholder=NOTE_PLACEHOLDER, padx=32, highlight_headings=True,
+        self.note = TextArea(self.pages, placeholder=NOTE_PLACEHOLDER, padx=32, reading=True,
+                             on_section_copy=self._section_copied,
                              on_change=lambda value: self._update_field("note", value))
         self._pages = {"context": self.context, "transcript": self.transcript, "note": self.note}
         for page in self._pages.values():
             page.grid(row=0, column=0, sticky="nsew")
+
+        self._start_dismissed = None     # the session whose start screen was put aside
+        self.start_screen = StartScreen(self.pages, actions={
+            "record": lambda: self._act("toggle_recording"),
+            "upload": lambda: self._act("upload"),
+            "paste": lambda: self._leave_start_screen("transcript"),
+            "context": lambda: self._leave_start_screen("context"),
+            "choose_template": self._choose_template_from_start,
+            "more_templates": lambda anchor: self._open_template_menu(anchor),
+            "change_mic": lambda anchor: self._open_mic_menu(anchor),
+        }, templates=lambda: (NoteStyleSelector.template_names(), NoteStyleSelector.current_style,
+                              NoteStyleSelector.default_style, self.notes_enabled()))
+        self._build_capture_side(self.pages)
         self.show_tab("transcript")
+
+    def _build_capture_side(self, parent):
+        """Beside the live transcript: context typed while listening, and what happens on stop."""
+        bg = Palette.BG
+        side = tk.Frame(parent, bg=bg, width=Theme.px(360))
+        side.grid_propagate(False)
+        side.pack_propagate(False)
+        self.capture_side = side
+        box = RoundedFrame(side, fill=Palette.SIDEBAR, outline=Palette.SIDEBAR, radius=14, padx=14, pady=12)
+        box.pack(fill="x", padx=(0, Theme.px(28)), pady=(Theme.px(16), 0))
+        tk.Label(box.body, text="Add what isn't said aloud", bg=Palette.SIDEBAR, fg=Palette.TEXT, anchor="w",
+                 font=Theme.font("base", "semibold")).pack(fill="x")
+        tk.Label(box.body, text="Vitals, exam findings, history. It goes into the note with the transcript.",
+                 bg=Palette.SIDEBAR, fg=Palette.TEXT_MUTED, anchor="w", justify="left", font=Theme.font("small"),
+                 wraplength=Theme.px(290)).pack(fill="x", pady=(Theme.px(2), Theme.px(8)))
+        border = tk.Frame(box.body, bg=Palette.BORDER, padx=1, pady=1)
+        border.pack(fill="x")
+        self.capture_context = tk.Text(border, height=7, wrap="word", relief="flat", bd=0, font=Theme.font("base"),
+                                       padx=Theme.px(10), pady=Theme.px(8), bg=Palette.BG, fg=Palette.TEXT,
+                                       insertbackground=Palette.TEXT, highlightthickness=0, undo=True)
+        self.capture_context.pack(fill="x")
+        self.capture_context.bind("<<Modified>>", self._on_capture_context)
+        self._capture_job = None
+
+        info = RoundedFrame(side, fill=bg, outline=Palette.BORDER, radius=14, padx=14, pady=12)
+        info.pack(fill="x", padx=(0, Theme.px(28)), pady=(Theme.px(12), 0))
+        tk.Label(info.body, text="When you stop", bg=bg, fg=Palette.TEXT, anchor="w",
+                 font=Theme.font("base", "semibold")).pack(fill="x")
+        self.capture_note_label = tk.Label(info.body, bg=bg, fg=Palette.TEXT_MUTED, anchor="w", justify="left",
+                                           font=Theme.font("small"), wraplength=Theme.px(290))
+        self.capture_note_label.pack(fill="x", pady=(Theme.px(2), 0))
+        self.capture_privacy = tk.Label(side, text="Audio stays on this computer", bg=bg, fg=Palette.TEXT_MUTED,
+                                        anchor="w", font=Theme.font("small"))
+        self.capture_privacy.pack(fill="x", padx=Theme.px(6), pady=(Theme.px(12), 0))
+
+    def _on_capture_context(self, _event=None):
+        if not self.capture_context.edit_modified():
+            return
+        self.capture_context.edit_modified(False)
+        if self._capture_job is not None:
+            self.root.after_cancel(self._capture_job)
+        self._capture_job = self.root.after(300, self._store_capture_context)
+
+    def _store_capture_context(self):
+        self._capture_job = None
+        value = self.capture_context.get("1.0", "end-1c")
+        if self.current is not None and value != self.current.context:
+            self.context.set_text(value)
+            self.context.flush_change()
+
+    def _refresh_capture_side(self):
+        show = self.is_recording and not self.compact
+        if show and not self.capture_side.winfo_manager():
+            self.capture_context.delete("1.0", "end")
+            self.capture_context.insert("1.0", self.current.context if self.current else "")
+            self.capture_context.edit_modified(False)
+            self.capture_side.grid(row=0, column=1, sticky="ns")
+        elif not show and self.capture_side.winfo_manager():
+            if self._capture_job is not None:
+                self.root.after_cancel(self._capture_job)
+                self._store_capture_context()
+            self.capture_side.grid_remove()
+        if show:
+            if self.notes_enabled():
+                style = NoteStyleSelector.current_style.replace(" - Default", "")
+                text = f"FreeScribe writes a {style} on this computer. You can edit it before you use it."
+            else:
+                text = "FreeScribe keeps the transcript. No note is written."
+            self.capture_note_label.configure(text=text)
+
+    # ------------------------------------------------------------ start screen
+    def _start_screen_wanted(self):
+        session = self.current
+        return (session is not None and session.is_empty and not self.is_recording and not self.locked
+                and self._start_dismissed != session.id)
+
+    def _refresh_start_screen(self):
+        if not hasattr(self, "start_screen"):
+            return
+        if self._start_screen_wanted():
+            if not self.start_screen.winfo_manager():
+                self.start_screen.refresh_templates()
+                self.start_screen.grid(row=0, column=0, columnspan=2, sticky="nsew")
+            self.start_screen.tkraise()
+        elif self.start_screen.winfo_manager():
+            self.start_screen.grid_remove()
+        self._refresh_footer()
+
+    def _leave_start_screen(self, tab_id):
+        if self.current is not None:
+            self._start_dismissed = self.current.id
+        self.show_tab(tab_id)
+        self._refresh_start_screen()
+        self.current_page().focus_editor()
+
+    def _choose_template_from_start(self, name):
+        self._choose_template(name)
+        self.start_screen.refresh_templates()
+
+    def _section_copied(self, heading):
+        self.toast(f"{heading or 'Section'} copied to clipboard")
 
     # ----------------------------------------------------------------- footer
     def _build_footer(self, parent):
@@ -518,6 +816,12 @@ class Workspace:
         footer = tk.Frame(parent, bg=bg)
         footer.pack(side="bottom", fill="x", padx=Theme.px(32), pady=(Theme.px(6), Theme.px(12)))
         self.footer = footer
+        self.suggestions = tk.Frame(footer, bg=bg)
+        self.suggestions.pack(fill="x", pady=(0, Theme.px(8)))
+        for text in EDIT_SUGGESTIONS:
+            chip = Chip(self.suggestions, text=text, tone="neutral", surface=bg,
+                        command=lambda t=text: self._use_suggestion(t))
+            chip.pack(side="left", padx=(0, Theme.px(6)))
         self.ask_frame = RoundedFrame(footer, fill=bg, outline=Palette.BORDER_STRONG, radius=14, padx=14, pady=8,
                                       surface=bg)
         self.ask_frame.pack(fill="x")
@@ -557,6 +861,37 @@ class Workspace:
         self.compact_expand.pack(side="left")
         self.compact_bar = bar
         self.compact_pause.set_enabled(False)
+
+    # ------------------------------------------------------------------ chat
+    def chat_visible(self) -> bool:
+        return self.chat_panel is not None and bool(self.chat_panel.frame.winfo_manager())
+
+    def toggle_chat(self, on_send, on_clear=None):
+        """Show the chat panel for the open session, or hide it if it is showing."""
+        if self.chat_visible():
+            self.hide_chat()
+            return None
+        return self.show_chat(on_send, on_clear)
+
+    def show_chat(self, on_send, on_clear=None):
+        if self.chat_panel is None:
+            self.chat_panel = ChatPanel(self.full, on_send, on_clear, on_close=self.hide_chat)
+            self._chat_border = tk.Frame(self.full, bg=Palette.BORDER, width=1)
+        if not self.chat_visible():
+            self.chat_panel.frame.pack(side="right", fill="y", before=self.main)
+            self._chat_border.pack(side="right", fill="y", before=self.main)
+        self.chat_panel.set_session(self.current)
+        self.chat_panel.focus()
+        return self.chat_panel
+
+    def hide_chat(self):
+        if self.chat_visible():
+            self.chat_panel.frame.pack_forget()
+            self._chat_border.pack_forget()
+
+    def refresh_chat(self, session_id=None):
+        if self.chat_panel is not None:
+            self.chat_panel.refresh(session_id)
 
     def show_compact(self):
         """Swap the full workspace for the small always-on-top recorder."""
@@ -621,6 +956,8 @@ class Workspace:
         self.note.set_text(session.note)
         self._rebuild_document_tabs()
         self._refresh_meta()
+        if self.chat_visible():
+            self.chat_panel.set_session(session)
         for session_id, row in self._rows.items():
             row.set_selected(session_id == session.id)
         if session.note.strip():
@@ -753,7 +1090,8 @@ class Workspace:
                 if shown >= self._list_limit:
                     break
                 row = SessionRow(body, session, on_select=self._on_row_select, on_menu=self._open_session_menu,
-                                 selected=session is self.current)
+                                 selected=session is self.current,
+                                 is_recording=lambda s: self.is_recording and s is self.current)
                 row.pack(fill="x", padx=(0, Theme.px(5)))
                 row.set_enabled(not self.locked)
                 self._rows[session.id] = row
@@ -841,7 +1179,7 @@ class Workspace:
         else:
             self.mic_chip.set(text=_ellipsize(name, font, width), tone="plain", icon_name=None)
 
-    def _open_mic_menu(self):
+    def _open_mic_menu(self, anchor=None):
         mic = self.mic
         if mic is None:
             return
@@ -857,7 +1195,7 @@ class Workspace:
                               "command": lambda n=name: mic.select_microphone(n)})
         else:
             items.append({"label": "No microphones found", "enabled": False})
-        popup_menu(self.mic_chip, items)
+        popup_menu(anchor or self.mic_chip, items)
 
     def _open_record_menu(self):
         if self.is_recording:
@@ -894,7 +1232,18 @@ class Workspace:
                 self._touch(self.current)
 
         self.is_recording, self.is_paused = recording, paused
+        if (started or stopped) and self.current is not None and self.current.id in self._rows:
+            self._rows[self.current.id].refresh()
 
+        if started:
+            self.collapse_sidebar()
+            self.header_actions.pack_forget()
+            self.rec_banner.pack(fill="x", padx=Theme.px(32), pady=(0, Theme.px(12)), before=self.tabs)
+        elif stopped:
+            self.rec_banner.pack_forget()
+            self.header_actions.pack(side="right", anchor="n", padx=(Theme.px(16), 0), before=self._header_left)
+            self.expand_sidebar()
+        self.rec_banner.set_state(paused, writes_note=self.notes_enabled())
         if recording:
             self.record_button.set(text="Stop transcribing", icon_name="stop", variant="danger")
             self.record_menu_button.pack_forget()
@@ -912,6 +1261,8 @@ class Workspace:
             self.compact_pause.set_enabled(False)
         self._update_timer()
         self._refresh_toolbar()
+        self._refresh_capture_side()
+        self._refresh_footer()
 
     def recording_seconds(self) -> float:
         if not self.is_recording:
@@ -931,6 +1282,7 @@ class Workspace:
             self.time_chip.set(text=text, tone="plain", icon_name="clock", dot=None)
         self.compact_time.configure(text=text, fg=Palette.DANGER if self.is_recording and not self.is_paused
                                     else Palette.TEXT)
+        self.rec_banner.set_time(text)
 
     def _tick(self):
         if not self.frame.winfo_exists():
@@ -951,6 +1303,12 @@ class Workspace:
         meter = self.compact_meter if self.compact else self.meter
         meter.set_color(Palette.WARNING if (self.warning_text and self.compact) else color)
         meter.set_level(0.0 if self.is_paused else level)
+        if self.is_recording and not self.compact:
+            self.rec_banner.set_level(level, paused=self.is_paused)
+        elif self.start_screen.winfo_manager():
+            mic = self.mic
+            self.start_screen.set_level(level, mic.selected_name if mic is not None else "",
+                                        ok=mic.status_ok if mic is not None else True)
         self.root.after(70, self._meter_tick)
 
     # ----------------------------------------------------------------- status
@@ -1019,6 +1377,7 @@ class Workspace:
         if signature == getattr(self, "_status_signature", None):
             return
         self._status_signature = signature
+        self._refresh_status_chip(rows)
         for child in self.status_frame.winfo_children():
             child.destroy()
         colors = {"ok": Palette.SUCCESS, "loading": "#D08A00", "error": Palette.DANGER,
@@ -1039,6 +1398,20 @@ class Workspace:
             label.pack(side="left", fill="x")
             if row.get("tooltip"):
                 Tooltip(label, row["tooltip"])
+
+    def _refresh_status_chip(self, rows):
+        states = [r.get("state") for r in rows]
+        if not rows:
+            text, dot = "Status", Palette.TEXT_FAINT
+        elif "error" in states:
+            text, dot = "Needs attention", Palette.DANGER
+        elif "loading" in states:
+            text, dot = "Loading models…", "#D08A00"
+        elif "remote" in states:
+            text, dot = "Private · uses your server", Palette.INFO
+        else:
+            text, dot = "Private · on this computer", Palette.SUCCESS
+        self.status_chip.set(text=text, dot=dot)
 
     def _open_help_menu(self):
         popup_menu(self.help_button, [
@@ -1070,6 +1443,12 @@ class Workspace:
         self.tabs.select(tab_id)
         self._on_tab_selected(tab_id)
 
+    def _on_tab_clicked(self, tab_id):
+        if self.current is not None and self.current.is_empty:
+            self._start_dismissed = self.current.id
+        self._on_tab_selected(tab_id)
+        self._refresh_start_screen()
+
     def _on_tab_selected(self, tab_id):
         page = self._pages.get(tab_id)
         if page is not None:
@@ -1087,6 +1466,7 @@ class Workspace:
         session = self.current
         if session is None or not hasattr(self, "ask_entry"):
             return
+        self._refresh_start_screen()
         has_transcript = bool(session.transcript.strip())
         idle = not self.locked and not self.is_recording
         self._fit_toolbar()
@@ -1099,8 +1479,16 @@ class Workspace:
         has_text = bool(self.current_page().get_text().strip())
         self.copy_button.set_enabled(has_text)
         self.export_button.set_enabled(has_text)
+        for tab_id, value in (("context", session.context), ("transcript", session.transcript),
+                              ("note", session.note)):
+            self.tabs.set_done(tab_id, bool(value.strip()))
         target = self.ask_target()
         can_ask = idle and target is not None
+        if can_ask != bool(self.suggestions.winfo_manager()):
+            if can_ask:
+                self.suggestions.pack(fill="x", pady=(0, Theme.px(8)), before=self.ask_frame)
+            else:
+                self.suggestions.pack_forget()
         self.ask_send.set_enabled(can_ask)
         self.ask_entry.configure(state="normal" if can_ask else "disabled")
         self.ask_entry.set_placeholder(ASK_PLACEHOLDER if (target is not None or not idle) else ASK_PLACEHOLDER_EMPTY)
@@ -1124,7 +1512,7 @@ class Workspace:
         selector.style_var.set(NoteStyleSelector.current_style)
         return selector
 
-    def _open_template_menu(self):
+    def _open_template_menu(self, anchor=None):
         if self.locked:
             return
         current = NoteStyleSelector.current_style
@@ -1150,7 +1538,7 @@ class Workspace:
         for name in DETAIL_LEVELS:
             items.append({"label": name, "checked": name == level,
                           "command": lambda n=name: self._choose_detail(n)})
-        popup_menu(self.template_button, items, align="right")
+        popup_menu(anchor or self.template_button, items, align="right")
 
     def detail_level(self) -> str:
         level = DEFAULT_DETAIL_LEVEL
@@ -1166,6 +1554,8 @@ class Workspace:
     def _choose_template(self, name):
         if NoteStyleSelector.select_style(name):
             self._apply_note_mode()
+            if hasattr(self, "start_screen") and self.start_screen.winfo_manager():
+                self.start_screen.refresh_templates()
             if name == NoteStyleSelector.NO_NOTE_STYLE:
                 self.toast("Sessions will be transcribed without creating a note", icon_name="info")
             elif self.current is not None and self.current.note.strip():
@@ -1220,7 +1610,7 @@ class Workspace:
 
     def _add_document_tab(self, document: Document, select=False):
         tab_id = f"doc:{document.id}"
-        area = TextArea(self.pages, placeholder="", padx=32, highlight_headings=True,
+        area = TextArea(self.pages, placeholder="", padx=32, reading=True, on_section_copy=self._section_copied,
                         on_change=lambda value, d=document: self._update_document(d, value))
         area.grid(row=0, column=0, sticky="nsew")
         area.set_text(document.text)
@@ -1341,6 +1731,14 @@ class Workspace:
         if session.note.strip():
             return {"kind": "note", "id": None, "session_id": session.id, "text": session.note, "label": "note"}
         return None
+
+    def _use_suggestion(self, text):
+        """A suggestion chip sends that edit straight away."""
+        if self.ask_target() is None or self.locked or self.is_recording:
+            self.toast("Create a note first, then ask for edits", icon_name="info")
+            return
+        self.ask_entry.set_value(text)
+        self._submit_ask()
 
     def _submit_ask(self):
         instruction = self.ask_entry.get_value().strip()

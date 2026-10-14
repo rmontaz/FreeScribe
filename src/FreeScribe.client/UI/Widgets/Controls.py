@@ -565,11 +565,23 @@ class TextArea(tk.Frame):
     only ever returns what the user (or the app) actually put there.
     """
 
+    # Longest comfortable line in the reading layout, in pixels before scaling
+    READING_WIDTH = 760
+
     def __init__(self, parent, placeholder="", on_change=None, highlight_headings=False,
-                 padx=28, pady=18, bg=Palette.BG, font=None, height=8):
+                 padx=28, pady=18, bg=Palette.BG, font=None, height=8, reading=False, on_section_copy=None):
+        """
+        :param reading: note layout: section headings in the accent colour with a Copy button each,
+            roomier lines, and lines no longer than :attr:`READING_WIDTH`
+        :param on_section_copy: called with the heading after a section was copied
+        """
         super().__init__(parent, bg=bg)
         self._on_change = on_change
-        self._highlight = highlight_headings
+        self._reading = reading
+        self._on_section_copy = on_section_copy
+        self._sections = []          # (heading text, heading start index, body text)
+        self._section_buttons = []
+        self._highlight = highlight_headings or reading
         self._readonly = False
         self._change_job = None
         self._last_text = ""
@@ -590,6 +602,12 @@ class TextArea(tk.Frame):
         self._scroll_visible = False
 
         self.text.tag_configure("heading", font=Theme.font("medium", "semibold"), spacing1=Theme.px(8))
+        if reading:
+            self.text.configure(font=font or Theme.font("large"), spacing1=Theme.px(2), spacing2=Theme.px(3),
+                                spacing3=Theme.px(3))
+            self.text.tag_configure("heading", font=Theme.font("small", "semibold"),
+                                    foreground=Palette.PRIMARY_PRESSED, spacing1=Theme.px(10), spacing3=Theme.px(4))
+            self.text.tag_configure("measure", rmargin=0)
         self.text.tag_configure("status", foreground=Palette.TEXT_MUTED)
 
         self._placeholder = tk.Label(self.text, text=placeholder, bg=bg, fg=Palette.TEXT_FAINT,
@@ -712,8 +730,65 @@ class TextArea(tk.Frame):
 
     def _apply_headings(self, value):
         self.text.tag_remove("heading", "1.0", "end")
-        for match in _HEADING_RE.finditer(value):
+        matches = list(_HEADING_RE.finditer(value))
+        for match in matches:
             self.text.tag_add("heading", f"1.0+{match.start()}c", f"1.0+{match.end()}c")
+        if not self._reading:
+            return
+        self.text.tag_add("measure", "1.0", "end")
+        self._sections = []
+        for number, match in enumerate(matches):
+            end = matches[number + 1].start() if number + 1 < len(matches) else len(value)
+            heading = match.group(0).strip().strip("#*: ").strip()
+            body = value[match.end():end].strip("\n")
+            if body.strip():
+                self._sections.append((heading, f"1.0+{match.start()}c", body))
+        # Let Tk lay the lines out with the heading style first, so the buttons line up with them
+        self.after(15, self._layout_section_buttons)
+
+    def section_texts(self):
+        """[(heading, body)] of the sections found in the reading layout."""
+        return [(heading, body) for heading, _start, body in self._sections]
+
+    def copy_section(self, number):
+        heading, _start, body = self._sections[number]
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(body)
+        except tk.TclError:
+            pass
+        if callable(self._on_section_copy):
+            self._on_section_copy(heading)
+        return body
+
+    def _reading_right_edge(self):
+        width = self.text.winfo_width()
+        limit = self._padx + Theme.px(self.READING_WIDTH)
+        return min(width - self._padx, limit)
+
+    def _layout_section_buttons(self):
+        """Keep a Copy button beside each section heading that is on screen."""
+        if not self._reading or not self.winfo_exists():
+            return
+        while len(self._section_buttons) < len(self._sections):
+            number = len(self._section_buttons)
+            button = Button(self.text, text="Copy", icon_name="copy", variant="ghost", size="xs",
+                            surface=self.text.cget("bg"), command=lambda n=number: self._copy_clicked(n),
+                            tooltip="Copy this section")
+            self._section_buttons.append(button)
+        right = self._reading_right_edge()
+        for number, button in enumerate(self._section_buttons):
+            info = self.text.dlineinfo(self._sections[number][1]) if number < len(self._sections) else None
+            if info is None:
+                button.place_forget()
+                continue
+            _x, y, _w, height, baseline = info
+            # Centre the button on the heading's text (the line box also holds the space above it)
+            button.place(x=right, y=y + baseline - Theme.px(4), anchor="e", bordermode="outside")
+
+    def _copy_clicked(self, number):
+        if number < len(self._sections):
+            self.copy_section(number)
 
     def _refresh_placeholder(self):
         empty = self.text.compare("end-1c", "==", "1.0")
@@ -728,9 +803,15 @@ class TextArea(tk.Frame):
 
     def _on_text_configure(self, event):
         self._placeholder.configure(wraplength=max(120, event.width - 2 * self._padx))
+        if self._reading:
+            spare = event.width - 2 * self._padx - Theme.px(self.READING_WIDTH)
+            self.text.tag_configure("measure", rmargin=max(0, spare))
+            self.after_idle(self._layout_section_buttons)
 
     def _on_scroll(self, first, last):
         self.scrollbar.set(first, last)
+        if self._reading and self._sections:
+            self.after_idle(self._layout_section_buttons)
         needed = float(first) > 0.0 or float(last) < 1.0
         if needed and not self._scroll_visible:
             self.scrollbar.grid(row=0, column=1, sticky="ns", padx=(0, Theme.px(4)), pady=Theme.px(6))
@@ -763,6 +844,11 @@ class ScrollFrame(tk.Frame):
 
     def scroll_to_top(self):
         self.canvas.yview_moveto(0)
+
+    def scroll_to_bottom(self):
+        self.canvas.update_idletasks()
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+        self.canvas.yview_moveto(1)
 
     def _on_scroll(self, first, last):
         self.scrollbar.set(first, last)
@@ -870,6 +956,26 @@ class Tabs(tk.Frame):
         if select or self.current is None:
             self.select(tab_id)
 
+    def set_compact(self, compact):
+        """Drop the tab icons when the strip is short of room."""
+        compact = bool(compact)
+        if compact == getattr(self, "_compact", False):
+            return
+        self._compact = compact
+        for tab in self._tabs.values():
+            if tab["icon"] is not None:
+                if compact:
+                    tab["icon"].pack_forget()
+                else:
+                    tab["icon"].pack(side="left", padx=(0, Theme.px(6)), before=tab["label"])
+
+    def set_done(self, tab_id, done):
+        """Show a tick instead of the tab's icon once that step has content."""
+        tab = self._tabs.get(tab_id)
+        if tab is not None and tab.get("done") != bool(done):
+            tab["done"] = bool(done)
+            self._paint(tab_id, hover=False)
+
     def rename(self, tab_id, label):
         if tab_id in self._tabs:
             self._tabs[tab_id]["label"].configure(text=label)
@@ -909,7 +1015,10 @@ class Tabs(tk.Frame):
         color = Palette.TEXT if (active or hover) else Palette.TEXT_MUTED
         tab["label"].configure(fg=color)
         if tab["icon"] is not None:
-            tab["icon"].configure(image=icon(tab["icon_name"], 15, color))
+            if tab.get("done"):
+                tab["icon"].configure(image=icon("check", 15, Palette.PRIMARY))
+            else:
+                tab["icon"].configure(image=icon(tab["icon_name"], 15, color))
         tab["underline"].configure(bg=Palette.PRIMARY if active else self.cget("bg"))
 
 

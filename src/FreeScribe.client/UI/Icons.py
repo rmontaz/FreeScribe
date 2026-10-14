@@ -322,7 +322,26 @@ def _undo(p):
     p.line((14.5, 19.5), (11, 19.5))
 
 
+def _chat(p):
+    p.line((7.5, 16.5), (6, 20.5), (11.5, 16.5))
+    p.rrect(3.5, 4, 20.5, 16.5, 4)
+
+
+def _form(p):
+    p.line((6, 3), (14, 3), (19, 8), (19, 21), (6, 21), closed=True)
+    p.line((14, 3), (14, 8), (19, 8))
+    p.line((9, 14.5), (11.4, 16.9), (15.8, 12.4))
+
+
+def _mapper(p):
+    p.rrect(4, 4, 20, 20, 2.5)
+    p.line((8, 9), (16, 9))
+    p.line((8, 13), (13.5, 13))
+    p.line((8, 17), (11, 17))
+
+
 _ICONS = {
+    "chat": _chat, "form": _form, "mapper": _mapper,
     "mic": _mic, "stop": _stop, "pause": _pause, "play": _play, "record": _record,
     "plus": _plus, "search": _search, "settings": _settings, "help": _help, "info": _info,
     "copy": _copy, "check": _check, "close": _close,

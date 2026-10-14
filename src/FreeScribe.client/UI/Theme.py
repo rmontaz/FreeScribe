@@ -98,9 +98,22 @@ class Theme:
     _families = frozenset()
 
     # ------------------------------------------------------------------ setup
+    @staticmethod
+    def _forget_images():
+        """Images belong to one Tk interpreter; a new main window needs fresh ones."""
+        import sys
+        for module_name, names in (("UI.Widgets.Controls", ("_image_cache",)),
+                                   ("UI.Icons", ("_photo_cache",))):
+            module = sys.modules.get(module_name)
+            for name in names:
+                cache = getattr(module, name, None) if module is not None else None
+                if isinstance(cache, dict):
+                    cache.clear()
+
     @classmethod
     def init(cls, root: tk.Misc) -> None:
         """Detect scaling and fonts, then install ttk styles and Tk defaults."""
+        cls._forget_images()
         cls._detect_scale(root)
         cls._detect_fonts(root)
         cls._configure_named_fonts()

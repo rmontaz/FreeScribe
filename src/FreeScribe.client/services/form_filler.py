@@ -561,18 +561,22 @@ def restore(value: str, mapping: Dict[str, str]) -> str:
 
 # ================================================================== prompting
 def compose_source(title: str = "", note: str = "", context: str = "", transcript: str = "",
-                   visit_date: Optional[_dt.date] = None, max_chars: int = 12000) -> str:
+                   visit_date: Optional[_dt.date] = None, max_chars: int = 12000, dictation: str = "") -> str:
     """
     The visit information the form is filled from, shortened to ``max_chars``.
 
-    The note comes first because it is the most condensed; when space runs out the
-    transcript is shortened first, then the context.
+    ``dictation`` is what the clinician said while talking through this form; it
+    comes first and wins over the rest. The note comes next because it is the most
+    condensed; when space runs out the transcript is shortened first, then the context.
     """
     visit_date = visit_date or _dt.date.today()
     head = [f"Date of visit: {visit_date.isoformat()}"]
     if title.strip():
         head.append(f"Session title (often the patient's name): {title.strip()}")
     parts = ["\n".join(head)]
+    if dictation.strip():
+        parts.append("Dictated by the clinician for this form (use this first; it overrides anything "
+                     f"below):\n{dictation.strip()}")
     if note.strip():
         parts.append(f"Clinician's note:\n{note.strip()}")
     if context.strip():

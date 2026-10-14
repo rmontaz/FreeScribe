@@ -78,8 +78,8 @@ from UI.Workspace import Workspace
 from services.sessions import SessionStore, DETAIL_LEVELS, DEFAULT_DETAIL_LEVEL, compose_source, compose_revision_prompt
 from services import form_filler
 from UI.FormFillWindow import FormFillWindow
-from UI.ChatWindow import ChatWindow
 from services.chat import compose_chat_prompt, form_event_text
+from services.dictation import Dictation, to_wav_bytes
 from utils.ui_state import UIState
 
 # parse command line arguments
@@ -1949,8 +1949,8 @@ def fill_form():
     fields = prepared.fields
     if not has_content:
         # Nothing for the AI to work from yet: open the form to be filled by hand
-        workspace.toast("This session is empty, so the form opens blank for you to fill in", icon_name="info")
-        _show_form_review(prepared, {}, session.title, session.id)
+        # Nothing for the AI to work from yet: the form opens blank, ready to fill by hand or by talking
+        _show_form_review(prepared, {}, session.title, session.id, from_session=False)
         return
 
     source = form_filler.compose_source(
@@ -1978,8 +1978,35 @@ def fill_form():
         start(hidden_source)
 
 
+def _ask_form_values(asked, source, mapping, form_title, cancel_event=None, progress=None):
+    """Asks the model for ``asked`` fields from ``source``; returns ({field name: value}, problems)."""
+    values, problems = {}, []
+    done = 0
+    for group, prompt in form_filler.build_prompts(asked, source, form_title):
+        if cancel_event is not None and cancel_event.is_set():
+            break
+        if progress is not None:
+            progress(done, len(group), len(asked))
+        try:
+            reply = send_text_to_chatgpt(prompt, cancel_event)
+        except Exception as e:
+            logger.exception(f"Form filling request failed: {e}")
+            problems.append(str(e))
+            reply = ""
+        if reply and is_llm_error(reply):
+            problems.append(describe_llm_error(reply))
+            reply = ""
+        answers = form_filler.parse_answers(reply or "", len(group))
+        if reply and not answers:
+            logger.warning(f"Could not read form answers from the model reply: {reply[:300]!r}")
+        for number, field in enumerate(group, 1):
+            value = form_filler.restore(answers.get(number, ""), mapping)
+            values[field.name] = form_filler.normalize(field, value)
+        done += len(group)
+    return values, problems
+
+
 def _fill_form_thread(prepared, asked, source, mapping, form_title, session_title, session_id=None):
-    batches = form_filler.build_prompts(asked, source, form_title)
     cancel_event = threading.Event()
     state = {"cancelled": False, "worker": None}
     values, problems = {}, []
@@ -2001,27 +2028,12 @@ def _fill_form_thread(prepared, asked, source, mapping, form_title, session_titl
                                    note_text=f"{len(asked)} fields to fill. Nothing is saved until you review it.")
 
     def work():
-        done = 0
-        for group, prompt in batches:
-            if cancel_event.is_set():
-                return
-            loading_window.set_text(f"Filling fields {done + 1}–{done + len(group)} of {len(asked)}…")
-            try:
-                reply = send_text_to_chatgpt(prompt, cancel_event)
-            except Exception as e:
-                logger.exception(f"Form filling request failed: {e}")
-                problems.append(str(e))
-                reply = ""
-            if reply and is_llm_error(reply):
-                problems.append(describe_llm_error(reply))
-                reply = ""
-            answers = form_filler.parse_answers(reply or "", len(group))
-            if reply and not answers:
-                logger.warning(f"Could not read form answers from the model reply: {reply[:300]!r}")
-            for number, field in enumerate(group, 1):
-                value = form_filler.restore(answers.get(number, ""), mapping)
-                values[field.name] = form_filler.normalize(field, value)
-            done += len(group)
+        found, issues = _ask_form_values(
+            asked, source, mapping, form_title, cancel_event,
+            progress=lambda done, size, total: loading_window.set_text(
+                f"Filling fields {done + 1}–{done + size} of {total}…"))
+        values.update(found)
+        problems.extend(issues)
 
     worker = threading.Thread(target=work)
     state["worker"] = worker
@@ -2038,8 +2050,9 @@ def _fill_form_thread(prepared, asked, source, mapping, form_title, session_titl
     run_on_ui(_show_form_review, prepared, values, session_title, session_id)
 
 
-def _show_form_review(prepared, values, session_title, session_id=None):
+def _show_form_review(prepared, values, session_title, session_id=None, from_session=True):
     review = {}
+    form_title = os.path.splitext(os.path.basename(prepared.original_path))[0]
 
     def on_saved(path):
         workspace.toast(f"Saved {os.path.basename(path)}")
@@ -2064,50 +2077,141 @@ def _show_form_review(prepared, values, session_title, session_id=None):
 
     review["window"] = FormFillWindow(root, prepared.original_path, prepared.fields, values,
                                       session_title=session_title, on_saved=on_saved,
-                                      fill_path=prepared.fill_path, converted=prepared.converted)
+                                      fill_path=prepared.fill_path, converted=prepared.converted,
+                                      talk=FormTalk(prepared, form_title, session_id), from_session=from_session)
+
+
+def transcribe_audio(audio):
+    """Transcribes in-memory audio (16 kHz float32) with the speech-to-text set in Settings."""
+    if app_settings.editable_settings[SettingsKeys.LOCAL_WHISPER.value]:
+        low_memory = app_settings.is_low_mem_mode()
+        if not is_whisper_valid() and low_memory:
+            load_stt_model(app_settings=app_settings).join()
+        if not is_whisper_valid():
+            raise RuntimeError("The speech-to-text model is still loading. Try again in a moment.")
+        try:
+            text = faster_whisper_transcribe(audio, app_settings=app_settings)
+        finally:
+            if low_memory:
+                unload_stt_model()
+    else:
+        settings = app_settings.editable_settings
+        headers = {"Authorization": f"Bearer {settings[SettingsKeys.WHISPER_SERVER_API_KEY.value]}"}
+        body = {"use_translate": settings[SettingsKeys.USE_TRANSLATE_TASK.value]}
+        if settings[SettingsKeys.WHISPER_LANGUAGE_CODE.value] not in SettingsWindow.AUTO_DETECT_LANGUAGE_CODES:
+            body["language_code"] = settings[SettingsKeys.WHISPER_LANGUAGE_CODE.value]
+        prompt = str(settings[SettingsKeys.WHISPER_INITIAL_PROMPT.value]).strip()
+        if prompt not in SettingsWindow.AUTO_DETECT_LANGUAGE_CODES:
+            body["initial_prompt"] = prompt
+        files = {"audio": ("dictation.wav", to_wav_bytes(audio, RATE), "audio/wav")}
+        response = requests.post(settings[SettingsKeys.WHISPER_ENDPOINT.value], headers=headers, files=files,
+                                 data=body, verify=not settings[SettingsKeys.S2T_SELF_SIGNED_CERT.value])
+        if response.status_code != 200:
+            raise RuntimeError(f"The speech-to-text server returned an error (HTTP {response.status_code}).")
+        text = response.json().get("text", "")
+    if app_settings.editable_settings[SettingsKeys.ENABLE_HALLUCINATION_CLEAN.value] and FeatureToggle.HALLUCINATION_CLEANING:
+        text = hallucination_cleaner.clean_text(text)
+    return (text or "").strip()
+
+
+class FormTalk:
+    """Talk to fill: the clinician talks through a form and the AI fills it from what was said."""
+
+    def __init__(self, prepared, form_title, session_id):
+        self.prepared = prepared
+        self.form_title = form_title
+        self.session_id = session_id
+        self.dictation = Dictation(open_microphone_stream, chunk=CHUNK, rate=RATE)
+
+    def start(self):
+        if is_recording:
+            raise RuntimeError("The microphone is in use for the visit. Stop transcribing first.")
+        self.dictation.start()
+
+    def level(self):
+        return self.dictation.level
+
+    def elapsed(self):
+        return self.dictation.elapsed
+
+    def cancel(self):
+        self.dictation.cancel()
+
+    def finish(self, on_text, on_error):
+        audio = self.dictation.stop()
+        if audio.size < RATE // 2:
+            on_error("That was too short. Choose Start talking and say the details for the form.")
+            return
+
+        def work():
+            try:
+                text = transcribe_audio(audio)
+            except Exception as e:
+                logger.exception(f"Dictation could not be transcribed: {e}")
+                run_on_ui(on_error, f"What you said could not be transcribed: {e}")
+                return
+            run_on_ui(on_text, text)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def fill(self, text, on_values, on_error):
+        workspace.flush_edits()
+        session = session_store.get(self.session_id) if self.session_id else None
+        source = form_filler.compose_source(
+            title=session.title if session else "", note=session.note if session else "",
+            context=session.context if session else "", transcript=session.transcript if session else "",
+            visit_date=session.created_at.date() if session else None, max_chars=form_source_budget(),
+            dictation=text)
+        hidden, mapping = form_filler.pseudonymize(source)
+        asked = [f for f in self.prepared.fields if f.needs_answer]
+        if not asked:
+            on_values({})
+            return
+
+        def start(prompt_source):
+            def work():
+                values, problems = _ask_form_values(asked, prompt_source, mapping, self.form_title)
+                if problems and not any(values.values()):
+                    run_on_ui(on_error, f"The form could not be filled. {problems[0]}")
+                else:
+                    run_on_ui(on_values, values)
+            threading.Thread(target=work, daemon=True).start()
+
+        if needs_phi_review():
+            ScrubWindow(root, hidden, start, lambda: on_error("Not sent to the AI."))
+        else:
+            start(hidden)
 
 
 # ------------------------------------------------------------------- chat
-chat_windows = {}       # session id -> open ChatWindow
-
-
 def refresh_chat_window(session_id):
-    window = chat_windows.get(session_id)
-    if window is not None and window.exists():
-        window.refresh()
+    workspace.refresh_chat(session_id)
+
+
+def _clear_chat(session):
+    if messagebox.askyesno("Clear chat", "Delete this session's chat? This cannot be undone."):
+        session.chat = []
+        session.touch()
+        if storing_notes_locally():
+            save_notes_history()
 
 
 def open_chat():
-    """Opens the chat for the current session (or brings it to the front)."""
+    """Shows or hides the chat panel for the open session."""
     workspace.flush_edits()
-    session = workspace.current
-    if session is None:
+    if workspace.current is None:
         return
-    window = chat_windows.get(session.id)
-    if window is not None and window.exists():
-        window.lift()
-        return
-
-    def on_clear():
-        if messagebox.askyesno("Clear chat", "Delete this session's chat? This cannot be undone.",
-                               parent=chat_windows[session.id].window):
-            session.chat = []
-            session.touch()
-            if storing_notes_locally():
-                save_notes_history()
-
-    chat_windows[session.id] = ChatWindow(root, session, on_send=lambda text: send_chat_message(session, text),
-                                          on_clear=on_clear, on_close=lambda: chat_windows.pop(session.id, None))
+    workspace.toggle_chat(on_send=send_chat_message, on_clear=_clear_chat)
 
 
 def send_chat_message(session, text):
     """Sends a chat message with the session as context and shows the reply."""
-    window = chat_windows.get(session.id)
+    panel = workspace.chat_panel
     workspace.flush_edits()
     history = list(session.chat)
     session.add_chat("user", text)
-    if window is not None:
-        window.refresh()
+    if panel is not None:
+        panel.refresh(session.id)
     if storing_notes_locally():
         save_notes_history()
 
@@ -2118,13 +2222,13 @@ def send_chat_message(session, text):
     hidden, mapping = form_filler.pseudonymize(prompt)
 
     def start(prompt_text):
-        if window is not None:
-            window.set_busy(True)
+        if panel is not None:
+            panel.set_busy(session.id, True)
         threading.Thread(target=_chat_thread, args=(session, prompt_text, mapping), daemon=True).start()
 
     def cancelled():
-        if window is not None:
-            window.set_busy(False, "Not sent.")
+        if panel is not None:
+            panel.set_busy(session.id, False, "Not sent.")
 
     if needs_phi_review():
         ScrubWindow(root, hidden, start, cancelled)
@@ -2141,16 +2245,16 @@ def _chat_thread(session, prompt_text, mapping):
         reply, error = "", str(e)
 
     def finish():
-        window = chat_windows.get(session.id)
+        panel = workspace.chat_panel
         if error:
-            if window is not None and window.exists():
-                window.show_error(f"No reply: {error}")
+            if panel is not None:
+                panel.show_error(session.id, f"No reply: {error}")
             else:
                 report_error(f"The chat reply could not be created. {error}")
             return
         session.add_chat("assistant", form_filler.restore(reply.strip(), mapping))
-        if window is not None and window.exists():
-            window.set_busy(False)
+        if panel is not None:
+            panel.set_busy(session.id, False)
         if storing_notes_locally():
             save_notes_history()
 

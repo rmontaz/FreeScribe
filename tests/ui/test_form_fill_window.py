@@ -117,3 +117,84 @@ def test_flat_form_is_filled_from_its_fillable_copy(root, tmp_path, monkeypatch)
     win.save()
     assert {f.label: f.existing for f in ff.read_form(str(target))}["Patient name"] == "Maria Lopez"
     assert not PdfReader(flat).get_fields()         # the original stays a flat PDF
+
+
+class FakeTalk:
+    def __init__(self):
+        self.calls = []
+        self.text = "Off work from March 3 to March 10. Light duties."
+        self.values = {"restrictions": "No lifting over 10 kg", "fit_to_return": "yes"}
+
+    def start(self):
+        self.calls.append("start")
+
+    def level(self):
+        return 0.5
+
+    def elapsed(self):
+        return 3.0
+
+    def cancel(self):
+        self.calls.append("cancel")
+
+    def finish(self, on_text, on_error):
+        self.calls.append("finish")
+        on_text(self.text)
+
+    def fill(self, text, on_values, on_error):
+        self.calls.append(("fill", text))
+        on_values(self.values)
+
+
+@pytest.fixture
+def blank_window(root):
+    from UI import FormFillWindow as module
+    talk = FakeTalk()
+    win = module.FormFillWindow(root, FORM, ff.read_form(FORM), {}, talk=talk, from_session=False)
+    win.fake_talk = talk
+    root.update()
+    yield win
+    win.close()
+
+
+def test_blank_form_offers_talk_to_fill(root, blank_window):
+    win = blank_window
+    assert win.talk_panel is not None
+    assert "talk through the form" in win.notice_label.cget("text")
+    assert not any(row.value() for row in win.rows if not row.field.existing)
+
+    win.talk_panel.main_button.invoke()                 # start talking
+    root.update()
+    assert win.talk_panel.state == "recording"
+    assert win.talk_panel.main_button._text == "Transcribe and fill"
+    win.talk_panel.main_button.invoke()                 # transcribe and fill
+    root.update()
+    r = rows(win)
+    assert r["restrictions"].value() == "No lifting over 10 kg" and r["restrictions"].mark.cget("text") == "AI"
+    assert r["fit_to_return"].value() == "yes"
+    assert win.talk_panel.said_text() == win.fake_talk.text
+    assert ("fill", win.fake_talk.text) in win.fake_talk.calls
+    assert win.talk_panel.state == "idle" and "Filled 2 fields" in win.talk_panel.status.cget("text")
+    assert "from what you said" in win.notice_label.cget("text")
+
+
+def test_talking_again_adds_to_what_was_said(root, blank_window):
+    win = blank_window
+    win.talk_panel.start(); win.talk_panel.finish()
+    win.fake_talk.text = "Review in two weeks."
+    win.talk_panel.start(); win.talk_panel.finish()
+    root.update()
+    assert win.talk_panel.said_text().endswith("Light duties.\nReview in two weeks.")
+
+
+def test_errors_and_discard(root, blank_window):
+    win = blank_window
+    win.fake_talk.start = lambda: (_ for _ in ()).throw(RuntimeError("The microphone is in use."))
+    win.talk_panel.start()
+    assert win.talk_panel.state == "idle" and win.talk_panel.status.cget("text") == "The microphone is in use."
+    del win.fake_talk.start
+    win.talk_panel.start()
+    win.talk_panel._discard()
+    assert "cancel" in win.fake_talk.calls and win.talk_panel.state == "idle"
+    win.talk_panel._got_text("")
+    assert "Nothing was heard" in win.talk_panel.status.cget("text")

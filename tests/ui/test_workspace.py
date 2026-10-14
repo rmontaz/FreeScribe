@@ -455,6 +455,23 @@ def test_chat_has_its_own_sidebar_button(workspace):
     assert ("open_chat", ()) in workspace.calls
 
 
+def test_chat_panel_docks_and_follows_the_session(root, workspace):
+    sent = []
+    panel = workspace.toggle_chat(on_send=lambda s, t: sent.append((s.title, t)))
+    pump(root)
+    assert workspace.chat_visible() and panel.session is workspace.current
+    workspace.title_entry.set_value("Alpha")
+    workspace._on_title_change("Alpha")
+    panel.entry.insert("1.0", "Summarise")
+    panel.send()
+    assert sent == [("Alpha", "Summarise")]
+    type_into(root, workspace.transcript, "Doctor: hello.")
+    workspace.new_session()
+    assert panel.session is workspace.current
+    workspace.toggle_chat(on_send=None)
+    assert not workspace.chat_visible()
+
+
 def test_help_menu_lists_third_party_licences(workspace):
     from UI.Widgets import Controls
     workspace._open_help_menu()
@@ -525,3 +542,87 @@ def test_new_sessions_start_with_the_default_template(root, workspace):
     workspace._open_template_menu()
     labels = [i["label"] for i in Controls.popup_menu.last_items if i]
     assert "History & Physical   (default)" in labels
+
+
+# ------------------------------------------------------------ redesigned layout
+def test_new_session_shows_the_start_screen(root, workspace):
+    pump(root)
+    assert workspace.start_screen.winfo_manager() == "grid"
+    assert workspace.footer.winfo_manager() == ""                 # nothing to edit yet
+    assert workspace.start_screen.cards and workspace.start_screen.cards[0].selected
+    workspace.start_screen.record_button.invoke()
+    assert ("toggle_recording", ()) in workspace.calls
+    workspace.start_screen.upload_button.invoke()
+    assert ("upload", ()) in workspace.calls
+    workspace.start_screen.paste_button.invoke()                 # put aside for typing a transcript
+    pump(root)
+    assert workspace.start_screen.winfo_manager() == "" and workspace.current_tab() == "transcript"
+
+
+def test_start_screen_template_cards_choose_the_note_type(root, workspace):
+    from UI.NoteStyleSelector import NoteStyleSelector
+    pump(root)
+    card = next(c for c in workspace.start_screen.cards[1:] if c.title != "More…")
+    card.invoke()
+    pump(root)
+    assert NoteStyleSelector.current_style.replace(" - Default", "") == card.title
+    assert next(c for c in workspace.start_screen.cards if c.title == card.title).selected
+
+
+def test_recording_layout(root, workspace):
+    workspace.begin_capture()
+    workspace.set_locked(True)
+    workspace.set_recording_state(True)
+    pump(root)
+    assert workspace.rec_banner.winfo_manager() == "pack"
+    assert workspace.rail.winfo_manager() == "pack" and workspace.sidebar.winfo_manager() == ""
+    assert workspace.capture_side.winfo_manager() == "grid"
+    assert workspace.footer.winfo_manager() == "" and workspace.start_screen.winfo_manager() == ""
+    assert workspace.rec_banner.stop_button._text == "Stop and write note"
+    workspace.capture_context.insert("1.0", "BP 132/84")
+    workspace.capture_context.event_generate("<<Modified>>")
+    pump(root, 0.5)
+    assert workspace.current.context == "BP 132/84"
+    workspace.set_recording_state(True, paused=True)
+    assert workspace.rec_banner.state_label.cget("text") == "PAUSED"
+    workspace.rec_banner.pause_button.invoke()
+    assert ("toggle_pause", ()) in workspace.calls
+    workspace.set_recording_state(False)
+    workspace.set_locked(False)
+    pump(root)
+    assert workspace.rec_banner.winfo_manager() == "" and workspace.sidebar.winfo_manager() == "pack"
+    assert workspace.capture_side.winfo_manager() == ""
+    assert workspace.context.get_text() == "BP 132/84"
+
+
+def test_session_status_pills_and_footer_status(root, workspace):
+    from UI.Workspace import session_status
+    s = Session(title="x")
+    assert session_status(s) is None
+    s.transcript = "hello"
+    assert session_status(s)[0] == "Transcript"
+    s.note = "S: x"
+    assert session_status(s)[0] == "Note ready"
+    assert session_status(s, recording=True)[0] == "Recording"
+    workspace._status_signature = None
+    workspace.refresh_status()
+    assert workspace.status_chip._text == "Private · on this computer"
+    workspace.toggle_details()
+    assert workspace.details_frame.winfo_manager() == "pack"
+    workspace.toggle_details()
+    assert workspace.details_frame.winfo_manager() == ""
+
+
+def test_note_sections_ticks_and_edit_suggestions(root, workspace):
+    from UI.Workspace import EDIT_SUGGESTIONS
+    type_into(root, workspace.transcript, "Doctor: hello.")
+    workspace.apply_note(workspace.current.id, "Subjective:\nCough for 2 weeks\n\nPlan:\nChest X-ray\nReview in 1 week")
+    pump(root, 0.4)
+    assert workspace.note.section_texts() == [("Subjective", "Cough for 2 weeks"),
+                                              ("Plan", "Chest X-ray\nReview in 1 week")]
+    assert workspace.note.copy_section(1) == "Chest X-ray\nReview in 1 week"
+    assert workspace.tabs._tabs["transcript"]["done"] and workspace.tabs._tabs["note"]["done"]
+    assert not workspace.tabs._tabs["context"].get("done")
+    assert workspace.suggestions.winfo_manager() == "pack"
+    workspace._use_suggestion(EDIT_SUGGESTIONS[0])
+    assert workspace.calls[-1][0] == "ask" and workspace.calls[-1][1][0] == EDIT_SUGGESTIONS[0]
