@@ -390,8 +390,8 @@ class Scrollbar(tk.Canvas):
     ``scrollbar.set`` to the widget's ``yscrollcommand``.
     """
 
-    THUMB = "#E6CDBD"
-    THUMB_ACTIVE = "#CFAE99"
+    THUMB = "#CFCFD2"
+    THUMB_ACTIVE = "#AEAEB2"
 
     def __init__(self, parent, command=None, surface=None, width=8):
         self._surface = surface or _bg_of(parent)
@@ -1296,7 +1296,7 @@ class Toast:
         tk.Label(inner, text=message, bg=Palette.TOAST_BG, fg=Palette.TOAST_TEXT,
                  font=Theme.font("base", "medium")).pack(side="left")
         if action_text and action:
-            link = tk.Label(inner, text=action_text, bg=Palette.TOAST_BG, fg="#C9EF85",
+            link = tk.Label(inner, text=action_text, bg=Palette.TOAST_BG, fg="#7FD49A",
                             font=Theme.font("base", "semibold"), cursor="hand2")
             link.pack(side="left", padx=(Theme.px(14), 0))
             link.bind("<Button-1>", lambda e: (cls.dismiss(host), action()))

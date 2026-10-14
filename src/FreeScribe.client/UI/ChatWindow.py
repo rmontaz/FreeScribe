@@ -21,7 +21,7 @@ from UI.Widgets.Controls import Button, ScrollFrame
 SUBTITLE = "Knows this visit's note, transcript, documents and forms"
 FOOTNOTE = "Names and numbers are hidden from the AI and put back in its reply."
 EMPTY = "Ask about this visit, for example “What follow-up was planned?” or “Write a short note for her employer”."
-FORM_TINT, FORM_TILE = "#6E3C0E", "#FFE3CF"
+FORM_TINT, FORM_TILE = "#7E3C0E", "#FEEBDD"
 
 
 class ChatPanel:

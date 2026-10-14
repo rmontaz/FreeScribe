@@ -23,52 +23,55 @@ from tkinter import ttk
 class Palette:
     """Colour tokens. Use these names rather than literal colours in UI code."""
 
-    # Peach & lime: warm cream and peach surfaces, a leaf-green accent and pastel lime highlights.
-    # Every text / background pair here meets WCAG AA (4.5:1) except TEXT_FAINT, used only for hints.
+    # Linux Mint (Mint-Y light): white and light grey surfaces, #303030 text and Mint's green.
+    # Mint's own green (#35A854) is used where there is no text on it; buttons use a slightly deeper
+    # shade so white labels meet WCAG AA (4.5:1), as does every other text / background pair here
+    # except TEXT_FAINT, used only for hints.
 
     # Surfaces
-    BG = "#FFFCF9"              # main working surface (warm cream)
-    SIDEBAR = "#FCEFE6"         # navigation rail (soft peach)
-    SURFACE = "#FFF7F1"         # quiet panels, input wells
-    RAISED = "#FAE8DC"          # neutral buttons, chips
-    HOVER = "#F7E0D1"           # hover on sidebar rows / neutral buttons
-    SELECTED = "#F3D6C3"        # selected sidebar row
-    PRESSED = "#EDCAB4"
+    BG = "#FFFFFF"              # main working surface (Mint-Y base)
+    SIDEBAR = "#F0F0F1"         # navigation rail
+    SURFACE = "#F8F8F9"         # quiet panels, input wells (Mint-Y window background)
+    RAISED = "#EBEBED"          # neutral buttons, chips (Mint-Y header)
+    HOVER = "#E2E2E4"           # hover on sidebar rows / neutral buttons
+    SELECTED = "#D9D9DC"        # selected sidebar row
+    PRESSED = "#CFCFD2"
 
     # Lines
-    BORDER = "#F1E1D6"
-    BORDER_STRONG = "#E0C6B5"
+    BORDER = "#DFDFDF"          # Mint-Y separator
+    BORDER_STRONG = "#BABABA"   # Mint-Y entry border
 
     # Text
-    TEXT = "#2A2421"            # warm charcoal
-    TEXT_MUTED = "#6B5E57"
-    TEXT_FAINT = "#9A867C"
+    TEXT = "#303030"            # Mint-Y text
+    TEXT_MUTED = "#5E5E62"
+    TEXT_FAINT = "#8E8E93"
     TEXT_ON_PRIMARY = "#FFFFFF"
 
-    # Brand / primary action (leaf green, with pastel lime highlights)
-    PRIMARY = "#3E7B1E"
-    PRIMARY_HOVER = "#346A18"
-    PRIMARY_PRESSED = "#2B5A13"
-    PRIMARY_SOFT = "#E8F6CF"
-    PRIMARY_SOFT_HOVER = "#DCF0B8"
+    # Brand / primary action (Mint green)
+    MINT = "#35A854"            # Mint-Y accent, for dots, meters and other marks without text
+    PRIMARY = "#2A8643"
+    PRIMARY_HOVER = "#287E3F"
+    PRIMARY_PRESSED = "#25763B"
+    PRIMARY_SOFT = "#E3F4E7"
+    PRIMARY_SOFT_HOVER = "#D2EDD9"
 
-    # Status
-    DANGER = "#CC4B37"          # warm coral red
-    DANGER_HOVER = "#B33F2D"
-    DANGER_PRESSED = "#983324"
-    DANGER_SOFT = "#FFE5DD"
-    WARNING = "#94590A"
-    WARNING_SOFT = "#FFF2D6"
-    WARNING_BORDER = "#F2D59A"
-    SUCCESS = "#4C9A2A"
-    INFO = "#376399"
-    INFO_SOFT = "#E8EFF9"
+    # Status (Mint-Y error red, warning orange and link blue, deepened where text sits on them)
+    DANGER = "#D2312A"
+    DANGER_HOVER = "#B82A24"
+    DANGER_PRESSED = "#9E241F"
+    DANGER_SOFT = "#FDE6E4"
+    WARNING = "#9A4A12"
+    WARNING_SOFT = "#FEEBDD"
+    WARNING_BORDER = "#F7C9A6"
+    SUCCESS = "#35A854"
+    INFO = "#2E6FC0"
+    INFO_SOFT = "#E6F0FC"
 
     # Overlays
-    TOAST_BG = "#2E2723"
+    TOAST_BG = "#222226"        # Mint panel
     TOAST_TEXT = "#FFFFFF"
-    DISABLED_BG = "#F5E9E0"
-    DISABLED_TEXT = "#B9A99F"
+    DISABLED_BG = "#EFEFF0"
+    DISABLED_TEXT = "#A9A9AD"
 
 
 # Type scale in points for Windows / Linux. macOS draws a point as one pixel,
