@@ -172,3 +172,28 @@ class TestRows:
         cleaned = ff.drop_repeats(meds, values)
         assert cleaned["med_name_3"] == "" and cleaned["med_start_3"] == ""
         assert cleaned["med_name_2"] == "Trazodone" and cleaned["med_start_2"] == "50 mg at bedtime"
+
+
+def test_month_first_dates_fixed_when_certain():
+    f = ff.FormField(name="d", kind=ff.TEXT, label="Date of birth (dd/mm/yyyy)")
+    assert ff.normalize(f, "03/14/1984") == "14/03/1984"
+    assert ff.normalize(f, "09/08/2026") == "09/08/2026"      # could be either: left as written
+    us = ff.FormField(name="d", kind=ff.TEXT, label="Date (mm/dd/yyyy)")
+    assert ff.normalize(us, "14/03/1984") == "03/14/1984"
+
+
+def test_a_repeated_section_is_cleared_as_a_whole():
+    labels = ["Middle name", "Medical condition:", "Impairment(s):", "Medication", "Medication",
+              "Medical condition:", "Impairment(s):", "Medication", "Medication", "Middle name",
+              "Patient height"]
+    form = [ff.FormField(name=str(i), kind=ff.TEXT, label=label) for i, label in enumerate(labels)]
+    # as on the CPP-D report: an ordinary field sits between the patient's details and the conditions
+    form.insert(1, form.pop())
+    ff._number_repeats(form)
+    values = {"0": "Ann", "1": "COPD", "2": "FEV1 32%", "3": "Trelegy", "4": "Salbutamol",
+              "5": "COPD", "6": "FEV1 32% again", "7": "Duloxetine", "8": "Trelegy", "9": "", "10": "165"}
+    cleaned = ff.drop_repeats(form, values)
+    assert cleaned["5"] == "" and cleaned["6"] == ""          # condition 2 repeats condition 1
+    assert cleaned["7"] == "Duloxetine"                        # a new medication stays
+    assert cleaned["8"] == ""                                  # Trelegy again
+    assert cleaned["1"] == "COPD" and cleaned["3"] == "Trelegy" and cleaned["4"] == "Salbutamol"

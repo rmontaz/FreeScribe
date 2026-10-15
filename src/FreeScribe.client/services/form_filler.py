@@ -1000,28 +1000,39 @@ def drop_repeats(fields: Sequence[FormField], values: Dict[str, str]) -> Dict[st
         return re.sub(r"[^a-z0-9]+", " ", (value or "").lower()).strip()
 
     values = dict(values)
+    # A row is an unbroken run of numbered fields; it ends where a column repeats
+    # ("Medication (2)" after "Medication (1)"), so a repeated section ("Medical
+    # condition (2)" and everything under it) is one row
     rows: List[List[FormField]] = []
+    current: List[FormField] = []
+    starts = set()      # columns that begin a row
     for f in fields:
-        row = row_of(f)[1]
-        if rows and row is not None and row_of(rows[-1][-1])[1] == row:
-            rows[-1].append(f)
-        elif row is not None:
-            rows.append([f])
-    seen: Dict[str, List[str]] = {}
+        base, row = row_of(f)
+        if row is None:
+            current = []
+            continue
+        if current and base not in starts and base not in {row_of(g)[0] for g in current}:
+            current.append(f)
+        else:
+            current = [f]
+            rows.append(current)
+            starts.add(base)
+    seen: Dict[str, List[str]] = {}     # every earlier answer, by column
     for row in rows:
         first = next((f for f in row if f.kind == TEXT), None)
         if first is None:
             continue
-        column = row_of(first)[0].split(" [table")[0]
         value = key(values.get(first.name))
-        if not value:
-            continue
-        earlier = seen.setdefault(column, [])
-        if any(value == e or (len(value) > 3 and (value in e or e in value)) for e in earlier):
+        earlier = seen.get(row_of(first)[0].split(" [table")[0], [])
+        # Only an item name tells rows apart; two treatments can share a start date or a dose
+        named = bool(re.search(r"[a-z]{3}", value))
+        if named and any(value == e or (len(value) > 3 and (value in e or e in value)) for e in earlier):
             for f in row:
                 values[f.name] = ""
-        else:
-            earlier.append(value)
+            continue
+        for f in row:
+            if f.kind == TEXT and key(values.get(f.name)):
+                seen.setdefault(row_of(f)[0].split(" [table")[0], []).append(key(values[f.name]))
     return values
 
 
@@ -1172,6 +1183,20 @@ def format_dates(text: str, layout: Optional[str]) -> str:
         return out(year, month, int(day) if day else None) or match.group(0)
 
     text = re.sub(r"\b(\d{4})-(\d{1,2})(?:-(\d{1,2}))?\b", iso, text)
+
+    # Numeric dates in the wrong order, when the numbers make that certain:
+    # "03/14/1984" in a day-first box can only be 14 March
+    day_first = layout.startswith("%d")
+    month_first = layout.startswith("%m")
+    if day_first or month_first:
+        def swap(match):
+            a, b, year = int(match.group(1)), int(match.group(2)), int(match.group(3))
+            if day_first and a <= 12 < b <= 31:
+                return out(year, a, b) or match.group(0)
+            if month_first and b <= 12 < a <= 31:
+                return out(year, b, a) or match.group(0)
+            return match.group(0)
+        text = re.sub(r"\b(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{4})\b", swap, text)
 
     def words(match):
         month = _MONTHS.get(match.group(1)[:3].lower())
