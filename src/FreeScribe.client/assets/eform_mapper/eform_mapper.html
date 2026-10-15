@@ -1508,7 +1508,7 @@
     try{
       const data = await readAsDataURL(file), img = await loadImage(data);
       pushUndo();
-      state.pages[page].imgData = data; state.pages[page].naturalW = img.width; state.pages[page].naturalH = img.height; state.pages[page].fileName = file.name || (titleSlug()+'_page'+page+'.png'); 
+      state.pages[page].imgData = data; state.pages[page].naturalW = img.width; state.pages[page].naturalH = img.height; state.pages[page].fileName = file.name || pageImageName(page); 
       const imgEl = getPageImgEl(page); imgEl.src = data;
       msg(`Loaded page ${page}: ${img.width}x${img.height}`, 'ok'); renderAll();
     }catch(err){ msg('Failed to load image: ' + (err.message || err), 'err'); }
@@ -1679,6 +1679,7 @@
       exportDraft: $('exportEditor').value || '',
       exportTitle: state.exportTitle || ($('eformTitle')?.value || 'Generated OSCAR eForm'),
       exportAuthor: state.exportAuthor || ($('eformAuthor')?.value || ''),
+      formId: formId(),
       snap: { ...state.snap },
       sourcePdf: state.sourcePdf || null
     };
@@ -1736,6 +1737,7 @@
     if ($('eformTitle')) $('eformTitle').value = state.exportTitle;
     state.exportAuthor = String(obj.exportAuthor || '');
     if ($('eformAuthor')) $('eformAuthor').value = state.exportAuthor;
+    state.formId = /^[a-z0-9]{4,12}$/.test(String(obj.formId || '')) ? String(obj.formId) : newFormId();
     if (obj.snap && typeof obj.snap === 'object') {
       state.snap = { ...state.snap, ...obj.snap };
       if ($('chkSnap')) $('chkSnap').checked = !!state.snap.enabled;
@@ -1992,6 +1994,7 @@
     $('exportEditor').value = '';
     state.exportTitle = 'Generated OSCAR eForm';
     state.exportAuthor = '';
+    state.formId = newFormId();
     if ($('eformTitle')) $('eformTitle').value = state.exportTitle;
     if ($('eformAuthor')) $('eformAuthor').value = '';
     setCurrentPage(1);
@@ -2490,7 +2493,7 @@ function repairImagePlaceholders(){
   for (let pg = 1; pg <= 10; pg++){
     const bgIdRe = new RegExp('(<img[^>]*id=["\']BGImage' + pg + '["\'][^>]*src=)["\'][^"\']*["\']', 'i');
     const bgSrcRe = new RegExp('(<img[^>]*src=)["\'][^"\']*["\']([^>]*id=["\']BGImage' + pg + '["\'])', 'i');
-    const slug = titleSlug() + '_page' + pg + '.png';
+    const slug = pageImageName(pg);
     const replacement = '$1"${oscar_image_path}' + slug + '"';
     const before = html;
     html = html.replace(bgIdRe, replacement);
@@ -2500,7 +2503,7 @@ function repairImagePlaceholders(){
   // Fallback: if no BGImage ids found, patch first unresolved img src
   if (patched === 0 && !html.includes('${oscar_image_path}')){
     html = html.replace(/<img([^>]*?)src=["'][^"']*["']([^>]*?)>/i,
-      '<img$1src="${oscar_image_path}' + titleSlug() + '_page1.png"$2>');
+      '<img$1src="${oscar_image_path}' + pageImageName(1) + '"$2>');
     patched = 1;
   }
   $('exportEditor').value = html;
@@ -2515,6 +2518,29 @@ function repairImagePlaceholders(){
     const t = String(state.exportTitle || 'eform').trim();
     return t.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'eform';
   }
+
+  // OSCAR keeps every eForm's images in one shared folder, so each form's file names must be
+  // its own: "<title>_<form id>_page1.png". The id is made once per form and saved with the
+  // session, so exporting the same form again keeps its names. (Added by FreeScribe.)
+  function newFormId(){
+    const bytes = new Uint8Array(4);
+    (window.crypto || window.msCrypto).getRandomValues(bytes);
+    return Array.from(bytes, b => b.toString(36).padStart(2, '0')).join('').slice(0, 6);
+  }
+  function formId(){
+    if (!/^[a-z0-9]{4,12}$/.test(String(state.formId || ''))) state.formId = newFormId();
+    return state.formId;
+  }
+  function formSlug(){
+    // The title, or the source PDF's name while the title is still the default
+    const title = String(state.exportTitle || '').trim();
+    if (title && title !== 'Generated OSCAR eForm') return titleSlug();
+    const pdf = state.sourcePdf && state.sourcePdf.name ? String(state.sourcePdf.name).replace(/\.[^.]+$/, '') : '';
+    const slug = pdf.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+    return slug || titleSlug();
+  }
+  function pageImageName(n){ return `${formSlug()}_${formId()}_page${n}.png`; }
+  function exportHtmlFileName(){ return `${formSlug()}_${formId()}.html`; }
 
 function buildExportHtml(){
   const p1=state.pages[1];
@@ -2819,7 +2845,7 @@ ${(function(){
     if (sigFields.length > 1) console.warn(`Page ${n}: ${sigFields.length} signature fields found; only the first will be rendered.`);
     const sig = sigFields[0] || null;
     const fields = allF.filter(f => !isSignatureField(f));
-    const pName = (p.fileName || (titleSlug()+'_page'+n+'.png')).replace(/^\/+/, '');
+    const pName = pageImageName(n);
     const pSrc = '${oscar_image_path}' + pName;
     const isLast = idx === exportPages.length - 1;
     const tailHtml = '';
@@ -2857,7 +2883,7 @@ async function downloadOscarPackage(){
   try {
     if (typeof JSZip === 'undefined') throw new Error('JSZip library not loaded.');
     const html = getEditorHtml();
-    const htmlFileName = 'generated_oscar_eform.html';
+    const htmlFileName = exportHtmlFileName();
     const zip = new JSZip();
     zip.file(htmlFileName, html);
     zip.file('eform.properties', buildOscarProperties(htmlFileName));
@@ -2866,7 +2892,7 @@ async function downloadOscarPackage(){
     Object.keys(state.pages).map(Number).sort((a,b)=>a-b).forEach(pg => {
       const p = state.pages[pg];
       if (p && p.imgData){
-        const fn = (p.fileName || (titleSlug()+'_page'+pg+'.png')).replace(/^\/+/, '');
+        const fn = pageImageName(pg);
         const b64 = String(p.imgData).split(',')[1] || '';
         if (b64) zip.file(fn, b64, {base64:true});
       }
@@ -2876,12 +2902,12 @@ async function downloadOscarPackage(){
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'oscar_eform_package.zip';
+    a.download = `${formSlug()}_${formId()}_oscar_package.zip`;
     document.body.appendChild(a);
     a.click();
     a.remove();
     setTimeout(()=>URL.revokeObjectURL(url), 1200);
-    msg('Downloaded oscar_eform_package.zip (HTML + eform.properties + images).', 'ok');
+    msg(`Downloaded ${a.download} (HTML + eform.properties + images named ${pageImageName(1).replace(/1\.png$/, 'N.png')}).`, 'ok');
   } catch (err) {
     msg('OSCAR package download failed: ' + (err.message || err), 'err');
   }
@@ -2906,7 +2932,7 @@ function buildDraftIntoEditor(){ try{ $('exportEditor').value = buildExportHtml(
 
   function getEditorHtml(){ const txt=$('exportEditor').value||''; return stripPdfControls(txt.trim() ? txt : buildExportHtml()); }
   async function copyExport(){ try{ await navigator.clipboard.writeText(getEditorHtml()); msg('Copied OSCAR HTML draft to clipboard.', 'ok'); }catch(err){ msg('Copy failed: ' + (err.message || err), 'err'); }}
-  function downloadExport(){ try{ const html=getEditorHtml(); const blob=new Blob([html],{type:'text/html'}); const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download='generated_oscar_eform.html'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),1000); msg('Downloaded generated_oscar_eform.html','ok'); }catch(err){ msg('Download failed: ' + (err.message || err), 'err'); }}
+  function downloadExport(){ try{ const html=getEditorHtml(); const blob=new Blob([html],{type:'text/html'}); const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=exportHtmlFileName(); document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),1000); msg('Downloaded ' + a.download, 'ok'); }catch(err){ msg('Download failed: ' + (err.message || err), 'err'); }}
   $('btnBuildDraft').addEventListener('click', buildDraftIntoEditor);
   
   $('btnCopyHtml').addEventListener('click', copyExport);
@@ -2973,7 +2999,6 @@ function buildDraftIntoEditor(){ try{ $('exportEditor').value = buildExportHtml(
     function bytes(n){ if(n<1024) return `${n} B`; if(n<1024*1024) return `${(n/1024).toFixed(1)} KB`; return `${(n/1048576).toFixed(2)} MB`; }
     function lv(){ const v=Number(c.levels.value); return Number.isFinite(v)?Math.max(8,Math.min(64,Math.round(v))):24; }
     function wTarget(){ const v=Number(c.width.value); return Number.isFinite(v)?Math.max(200,Math.min(1500,Math.round(v))):1500; }
-    function fname(prefix,pageN,ex){ return `${prefix}_page-${String(pageN).padStart(3,'0')}.${ex}`; }
 
     function addLink(blob, name, auto=true){
       const url = URL.createObjectURL(blob);
@@ -3000,7 +3025,7 @@ function buildDraftIntoEditor(){ try{ $('exportEditor').value = buildExportHtml(
       const dataUrl = await blobToDataUrl(blob);
       const img = await loadImage(dataUrl);
       if (!state.pages[page]){ state.pages[page]={imgData:null,naturalW:0,naturalH:0,fileName:''}; createPageDOM(page); }
-      const resolvedName = fileName || state.pages[page].fileName || (titleSlug()+'_page'+page+'.png');
+      const resolvedName = fileName || state.pages[page].fileName || pageImageName(page);
       state.pages[page] = {
         imgData: dataUrl,
         naturalW: img.naturalWidth || img.width || 0,
@@ -3118,7 +3143,6 @@ function buildDraftIntoEditor(){ try{ $('exportEditor').value = buildExportHtml(
 
     async function convertCore(download){
       c.links.innerHTML = '';
-      const prefix = safe(c.file.files?.[0]?.name || 'form');
       const outputs = [];
 
       if(c.mode.value === 'single'){
@@ -3126,7 +3150,7 @@ function buildDraftIntoEditor(){ try{ $('exportEditor').value = buildExportHtml(
         const dim = await renderPdfPage(pnum);
         const blob = await toBlob();
         if(!blob) throw new Error('Blob failed');
-        const name = fname(prefix,pnum,'png');
+        const name = pageImageName(state.currentPage >= 1 ? state.currentPage : 1);
         addLink(blob, name, !!download);
         outputs.push({ page:pnum, blob, name, dim });
       } else {
@@ -3136,7 +3160,7 @@ function buildDraftIntoEditor(){ try{ $('exportEditor').value = buildExportHtml(
           await renderPdfPage(p);
           const blob = await toBlob();
           if(!blob) throw new Error(`Page ${p} failed`);
-          const name = fname(prefix,p,'png');
+          const name = pageImageName(p);
           addLink(blob, name, !!download);
           outputs.push({ page:p, blob, name, dim:{w:c.canvas.width, h:c.canvas.height} });
         }
@@ -3152,14 +3176,14 @@ function buildDraftIntoEditor(){ try{ $('exportEditor').value = buildExportHtml(
 
       if(c.mode.value === 'single'){
         const targetPage = state.currentPage >= 1 ? state.currentPage : 1;
-        await loadBlobIntoMapper(targetPage, outputs[0].blob, titleSlug()+'_page'+targetPage+'.png', outputs[0].page);
+        await loadBlobIntoMapper(targetPage, outputs[0].blob, pageImageName(targetPage), outputs[0].page);
         loaded = 1;
         setCurrentPage(targetPage);
       } else {
         for (const out of outputs){
           if (out.page >= 1 && out.page <= 10){
             if (out.page > 1 && !state.pages[out.page] && getPageCount() < out.page) addPage();
-            await loadBlobIntoMapper(out.page, out.blob, titleSlug()+'_page'+out.page+'.png', out.page);
+            await loadBlobIntoMapper(out.page, out.blob, pageImageName(out.page), out.page);
             loaded++;
           }
         }
