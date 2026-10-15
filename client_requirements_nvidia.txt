@@ -35,6 +35,9 @@ phonenumbers==8.13.46
 PyAudio==0.2.14
 pydantic==2.11.3
 pydantic_ai==0.0.55
+# pydantic_ai 0.0.55 imports opentelemetry._events, removed in opentelemetry-api 1.44
+opentelemetry-api==1.39.1
+opentelemetry-semantic-conventions==0.60b1
 pydantic_core==2.33.1
 pyinstaller==6.10.0
 pyinstaller-hooks-contrib==2024.8
