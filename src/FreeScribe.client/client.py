@@ -2841,6 +2841,67 @@ def await_models(timeout_length=60):
 
 root.after(100, await_models)
 
+
+def _run_self_test(audio_path, report_path):
+    """--self-test: wait for the models, transcribe the audio, write a note, report and exit."""
+    from services import self_test
+    report = self_test.Report(audio_path, report_path, version=get_application_version())
+    code = 1
+    try:
+        settings = app_settings.editable_settings
+        report.step("settings", True, local_speech=bool(settings[SettingsKeys.LOCAL_WHISPER.value]),
+                    local_ai=bool(settings[SettingsKeys.LOCAL_LLM.value]))
+        deadline = time.time() + self_test.MODEL_TIMEOUT
+        while True:
+            speech_ready = not settings[SettingsKeys.LOCAL_WHISPER.value] or is_whisper_valid()
+            ai_ready = not settings[SettingsKeys.LOCAL_LLM.value] or ModelManager.is_llm_valid()
+            speech_failed = get_whisper_model() == WhisperModelStatus.ERROR
+            ai_failed = ModelManager.local_model == ModelStatus.ERROR
+            if speech_ready and ai_ready:
+                break
+            if speech_failed or ai_failed or time.time() > deadline:
+                report.step("models", False, speech_ready=speech_ready, ai_ready=ai_ready,
+                            speech_failed=speech_failed, ai_failed=ai_failed,
+                            error="timed out" if time.time() > deadline else "a model failed to load")
+                return
+            time.sleep(2)
+        report.step("models", True)
+
+        audio = self_test.load_wav(audio_path)
+        report.step("audio", True, seconds_of_audio=round(len(audio) / self_test.RATE, 1))
+
+        started = time.time()
+        transcript = transcribe_audio(audio)
+        report.step("transcript", bool(transcript.strip()), text=transcript,
+                    took=round(time.time() - started, 1))
+        if not transcript.strip():
+            return
+
+        started = time.time()
+        prompt_info = NoteStyleSelector.get_current_prompt_info()
+        post_prompt = f"{prompt_info.post_prompt} {get_detail_instruction()}".strip()
+        note = send_text_to_chatgpt(f"{prompt_info.pre_prompt} {transcript} {post_prompt}")
+        note_ok = bool(note and note.strip()) and not is_llm_error(note)
+        report.step("note", note_ok, template=str(NoteStyleSelector.current_style), text=note,
+                    took=round(time.time() - started, 1))
+    except Exception as error:  # noqa: BLE001 - every failure goes into the report
+        logger.exception(f"Self-test failed: {error}")
+        report.failure("error", error)
+    finally:
+        code = report.finish()
+        logger.info(f"Self-test finished with exit code {code}; report: {report.path}")
+        try:
+            root.after(0, root.destroy)
+        except Exception:
+            pass
+        # Leave even if a window or thread keeps the app alive
+        threading.Timer(3.0, lambda: os._exit(code)).start()
+
+
+if utils.arg_parser.args.self_test:
+    threading.Thread(target=_run_self_test, name="self-test", daemon=True,
+                     args=(utils.arg_parser.args.self_test, utils.arg_parser.args.self_test_report)).start()
+
 root.bind("<<LoadSttModel>>", lambda e: load_stt_model(e, app_settings=app_settings))
 root.bind("<<UnloadSttModel>>", unload_stt_model)
 

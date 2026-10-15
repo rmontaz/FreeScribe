@@ -1,0 +1,317 @@
+name: Installer test
+
+# Installs a released FreeScribe on clean test machines (Windows, Mac with Apple chip,
+# Intel Mac, Linux), checks that the AI model was put in place, starts the app, and
+# runs `--self-test`: the app transcribes a short spoken test visit and writes a note.
+# Results (reports, logs, screenshots) are attached to the run, and the job summary
+# shows the transcript and note for each system.
+# Start it from the Actions tab or with:
+#   gh workflow run installer-test.yml -f tag=<release tag>
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to test"
+        required: true
+      platforms:
+        description: "Which installers: all, or any of windows, mac, linux (comma separated)"
+        required: false
+        default: "all"
+      windows_arch:
+        description: "Windows build to install: CPU or NVIDIA"
+        required: false
+        default: "CPU"
+
+env:
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  audio:
+    name: Record the test visit
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Speak the test visit (two voices)
+        run: |
+          mkdir -p audio && cd audio
+          voices=$(say -v '?' | awk '{print $1}')
+          pick() { for v in "$@"; do echo "$voices" | grep -qx "$v" && { echo "$v"; return; }; done; echo ""; }
+          DOCTOR=$(pick Daniel Alex Fred Tom); PATIENT=$(pick Samantha Karen Moira Victoria)
+          echo "Doctor voice: ${DOCTOR:-default}, patient voice: ${PATIENT:-default}"
+          i=0
+          while IFS='|' read -r who text; do
+            [ -z "$text" ] && continue
+            i=$((i+1)); voice=$DOCTOR; [ "$who" = "Patient" ] && voice=$PATIENT
+            if [ -n "$voice" ]; then say -v "$voice" -o "seg$i.aiff" "$text"; else say -o "seg$i.aiff" "$text"; fi
+            afconvert -f WAVE -d LEI16@16000 -c 1 "seg$i.aiff" "seg$i.wav"
+          done < ../scripts/test_visit.txt
+          python3 - <<'EOF'
+          import glob, wave
+          parts = sorted(glob.glob("seg*.wav"), key=lambda p: int(p[3:-4]))
+          silence = b"\x00\x00" * 8000            # half a second at 16 kHz
+          with wave.open("visit.wav", "wb") as out:
+              out.setnchannels(1); out.setsampwidth(2); out.setframerate(16000)
+              for p in parts:
+                  with wave.open(p, "rb") as w:
+                      out.writeframes(w.readframes(w.getnframes()) + silence)
+          with wave.open("visit.wav", "rb") as w:
+              print(f"visit.wav: {w.getnframes() / 16000:.1f} s")
+          EOF
+      - uses: actions/upload-artifact@v4
+        with:
+          name: test-visit-audio
+          path: audio/visit.wav
+
+  windows:
+    name: Windows (${{ matrix.os }})
+    needs: audio
+    if: inputs.platforms == 'all' || contains(inputs.platforms, 'windows')
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    env:
+      OUT: ${{ github.workspace }}\results
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: test-visit-audio
+          path: audio
+
+      - name: Download the installer
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force $env:OUT | Out-Null
+          gh release download "${{ inputs.tag }}" -R "${{ github.repository }}" -p FreeScribeInstaller_windows.exe -D .
+          Get-Item .\FreeScribeInstaller_windows.exe | Select-Object Name, Length | Format-Table | Out-String | Tee-Object "$env:OUT\installer.txt"
+
+      - name: Install silently
+        shell: pwsh
+        run: |
+          $p = Start-Process .\FreeScribeInstaller_windows.exe -ArgumentList '/S', '/ARCH=${{ inputs.windows_arch }}' -PassThru -Wait
+          "Installer exit code: $($p.ExitCode)" | Tee-Object "$env:OUT\install-result.txt"
+          $dir = "${env:ProgramFiles(x86)}\FreeScribe"
+          if (-not (Test-Path $dir)) { $dir = "$env:ProgramFiles\FreeScribe" }
+          "Install folder: $dir" | Tee-Object -Append "$env:OUT\install-result.txt"
+          Get-ChildItem $dir -Recurse -Depth 1 | Select-Object FullName, Length | Format-Table -AutoSize | Out-String -Width 300 | Out-File "$env:OUT\install-files.txt"
+          $exe = Get-ChildItem $dir -Recurse -Filter "freescribe-client*.exe" | Select-Object -First 1
+          if (-not $exe) { Write-Error "No freescribe-client exe was installed"; exit 1 }
+          "APP_EXE=$($exe.FullName)" | Out-File -Append $env:GITHUB_ENV
+          $model = Get-ChildItem $dir -Recurse -Filter "*.gguf" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($model) { "AI model: $($model.FullName) ($([int]($model.Length/1MB)) MB)" | Tee-Object -Append "$env:OUT\install-result.txt" }
+          else { Write-Error "The installer did not put the AI model (.gguf) in place"; exit 1 }
+
+      - name: Start FreeScribe and watch it
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing, UIAutomationClient, UIAutomationTypes
+          function Snap($name) {
+            $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+            $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+            $g = [System.Drawing.Graphics]::FromImage($bmp)
+            $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+            $bmp.Save("$env:OUT\$name.png"); $g.Dispose(); $bmp.Dispose()
+          }
+          function Windows($label) {
+            $root = [System.Windows.Automation.AutomationElement]::RootElement
+            $all = $root.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition)
+            $lines = @("---- $label $(Get-Date -Format HH:mm:ss)")
+            foreach ($w in $all) {
+              try { $proc = (Get-Process -Id $w.Current.ProcessId -ErrorAction Stop).ProcessName } catch { $proc = "?" }
+              if ($proc -notmatch 'freescribe|WerFault|python') { continue }
+              $lines += "WINDOW [$proc] '$($w.Current.Name)' class=$($w.Current.ClassName)"
+              $texts = $w.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
+              foreach ($t in $texts) { if ($t.Current.Name) { $lines += "    $($t.Current.ControlType.ProgrammaticName): $($t.Current.Name)" } }
+            }
+            $lines | Tee-Object -Append "$env:OUT\windows.txt"
+          }
+          $p = Start-Process $env:APP_EXE -PassThru
+          for ($i = 1; $i -le 8; $i++) {
+            Start-Sleep -Seconds 15
+            if ($i % 2 -eq 0) { Snap ("start_{0:D3}s" -f ($i*15)); Windows "after $($i*15)s" }
+            if (-not (Get-Process -Id $p.Id -ErrorAction SilentlyContinue)) { "FreeScribe exited on its own" | Tee-Object "$env:OUT\run.txt"; break }
+          }
+          $crash = Select-String -Path "$env:OUT\windows.txt" -Pattern "Unhandled exception" -Quiet
+          Get-Process | Where-Object { $_.ProcessName -match 'freescribe' } | Stop-Process -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 5
+          if ($crash) { Write-Error "FreeScribe showed an unhandled exception at startup (see windows.txt)"; exit 1 }
+
+      - name: Self-test (transcribe the test visit and write a note)
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          $audio = (Resolve-Path audio\visit.wav).Path
+          $p = Start-Process $env:APP_EXE -ArgumentList '--self-test', "`"$audio`"", '--self-test-report', "`"$env:OUT\report.json`"" -PassThru
+          $deadline = (Get-Date).AddMinutes(45); $n = 0
+          while (-not $p.HasExited -and (Get-Date) -lt $deadline) {
+            Start-Sleep -Seconds 30; $n++
+            if ($n % 4 -eq 0) {
+              $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+              $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+              $g = [System.Drawing.Graphics]::FromImage($bmp); $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+              $bmp.Save("$env:OUT\selftest_{0:D3}min.png" -f ($n/2)); $g.Dispose(); $bmp.Dispose()
+            }
+          }
+          if (-not $p.HasExited) { $p | Stop-Process -Force; "Self-test did not finish within 45 minutes" | Tee-Object "$env:OUT\selftest-exit.txt"; exit 1 }
+          $p.WaitForExit()
+          "Self-test exit code: $($p.ExitCode)" | Tee-Object "$env:OUT\selftest-exit.txt"
+
+      - name: Check the result
+        if: always()
+        shell: pwsh
+        run: python scripts/check_self_test.py "$env:OUT\report.json" "Windows ${{ matrix.os }} (${{ inputs.windows_arch }})"
+
+      - name: Collect crash reports and app files
+        if: always()
+        shell: pwsh
+        run: |
+          Get-WinEvent -FilterHashtable @{LogName='Application'; StartTime=(Get-Date).AddHours(-2)} -ErrorAction SilentlyContinue |
+            Where-Object { $_.ProviderName -match 'Application Error|Windows Error Reporting' -or $_.Message -match 'freescribe' } |
+            Format-List TimeCreated, ProviderName, Id, Message | Out-String -Width 400 | Out-File "$env:OUT\event-log.txt"
+          foreach ($d in "$env:APPDATA\FreeScribe", "$env:LOCALAPPDATA\FreeScribe", "$env:ProgramData\FreeScribe") {
+            if (Test-Path $d) {
+              Get-ChildItem $d -Recurse -Depth 2 | Select-Object FullName, Length, LastWriteTime | Format-Table -AutoSize |
+                Out-String -Width 400 | Out-File -Append "$env:OUT\app-data.txt"
+            }
+          }
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: results-windows-${{ matrix.os }}
+          path: results
+
+  mac:
+    name: Mac (${{ matrix.name }})
+    needs: audio
+    if: inputs.platforms == 'all' || contains(inputs.platforms, 'mac')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Apple chip
+            runner: macos-15
+            pkg: FreeScribeInstaller_arm64.pkg
+            slug: apple-chip
+          - name: Intel
+            runner: macos-15-intel
+            pkg: FreeScribeInstaller_x86_64.pkg
+            slug: intel
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: test-visit-audio
+          path: audio
+
+      - name: Download and install the package
+        run: |
+          mkdir -p results
+          gh release download "${{ inputs.tag }}" -R "${{ github.repository }}" -p "${{ matrix.pkg }}" -D .
+          ls -la "${{ matrix.pkg }}" | tee results/installer.txt
+          sudo installer -pkg "${{ matrix.pkg }}" -target / -verboseR 2>&1 | tail -20 | tee results/install-result.txt
+          APP=$(ls -d /Applications/FreeScribe*.app /Applications/*Scribe*.app 2>/dev/null | head -1)
+          [ -n "$APP" ] || { echo "No FreeScribe app in /Applications"; ls /Applications; exit 1; }
+          EXE=$(ls "$APP"/Contents/MacOS/* | head -1)
+          echo "APP=$APP" >> "$GITHUB_ENV"; echo "EXE=$EXE" >> "$GITHUB_ENV"
+          echo "App: $APP ($EXE)" | tee -a results/install-result.txt
+          ls -la /Users/Shared/FreeScribe/models 2>&1 | tee -a results/install-result.txt
+          ls /Users/Shared/FreeScribe/models/*.gguf >/dev/null 2>&1 || { echo "The installer did not put the AI model in place"; exit 1; }
+
+      - name: Self-test (transcribe the test visit and write a note)
+        run: |
+          "$EXE" --self-test "$PWD/audio/visit.wav" --self-test-report "$PWD/results/report.json" > results/app.log 2>&1 &
+          PID=$!
+          for i in $(seq 1 90); do
+            sleep 30
+            kill -0 $PID 2>/dev/null || break
+            [ $((i % 4)) -eq 0 ] && screencapture -x "results/selftest_$((i / 2))min.png" 2>/dev/null || true
+          done
+          if kill -0 $PID 2>/dev/null; then kill $PID; echo "Self-test did not finish within 45 minutes" | tee results/selftest-exit.txt; exit 1; fi
+          wait $PID; CODE=$?
+          echo "Self-test exit code: $CODE" | tee results/selftest-exit.txt
+          grep -a -i -E "Traceback|No module named|Error" results/app.log | head -20 || true
+
+      - name: Check the result
+        if: always()
+        run: python3 scripts/check_self_test.py results/report.json "Mac ${{ matrix.name }}"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: results-mac-${{ matrix.slug }}
+          path: results
+
+  linux:
+    name: Linux
+    needs: audio
+    if: inputs.platforms == 'all' || contains(inputs.platforms, 'linux')
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: test-visit-audio
+          path: audio
+
+      - name: Download and unpack
+        run: |
+          mkdir -p results
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb imagemagick libportaudio2 libgl1 libegl1 libxkbcommon0 libxcb-cursor0 > /dev/null
+          gh release download "${{ inputs.tag }}" -R "${{ github.repository }}" -p FreeScribe_linux_x86_64.tar.gz -D .
+          tar -xzf FreeScribe_linux_x86_64.tar.gz
+          ls -la FreeScribe | head -20 | tee results/install-result.txt
+          # What answering "yes" to the launcher's download question does
+          mkdir -p FreeScribe/models
+          curl -L --fail -s -o FreeScribe/models/gemma-2-2b-it-Q8_0.gguf \
+            "https://huggingface.co/lmstudio-community/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-Q8_0.gguf?download=true"
+          ls -la FreeScribe/models | tee -a results/install-result.txt
+
+      - name: Self-test (transcribe the test visit and write a note)
+        run: |
+          Xvfb :99 -screen 0 1440x900x24 & sleep 2
+          export DISPLAY=:99
+          ( sleep 240; import -window root results/selftest_4min.png ) &
+          set +e
+          timeout 2700 ./FreeScribe/run-freescribe.sh --self-test "$PWD/audio/visit.wav" \
+            --self-test-report "$PWD/results/report.json" < /dev/null > results/app.log 2>&1
+          CODE=$?
+          echo "Self-test exit code: $CODE" | tee results/selftest-exit.txt
+          grep -a -i -E "Traceback|No module named|Error" results/app.log | head -20 || true
+
+      - name: Check the result
+        if: always()
+        run: python3 scripts/check_self_test.py results/report.json "Linux (Ubuntu 22.04)"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: results-linux
+          path: results
+
+  windows-unit-tests:
+    name: Unit tests on Windows (from source)
+    if: inputs.platforms == 'all' || contains(inputs.platforms, 'windows')
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install requirements
+        run: |
+          pip install --index-url https://abetlen.github.io/llama-cpp-python/whl/cpu --extra-index-url https://pypi.org/simple llama-cpp-python==v0.3.8
+          if (Test-Path constraints/windows.txt) { pip install -r client_requirements.txt -c constraints/windows.txt } else { pip install -r client_requirements.txt }
+          pip install pytest
+      - name: Run the tests
+        run: python -m pytest -q tests --ignore=tests/services/intent_actions --ignore=tests/services/test_whisper_hallucination_cleaner.py --ignore=tests/services/test_factual_consistency.py -p no:cacheprovider

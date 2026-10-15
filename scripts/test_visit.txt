@@ -1,0 +1,8 @@
+Doctor|Good morning. What brings you in today?
+Patient|I have had chest pain for three days. It comes on when I climb the stairs, and it goes away when I rest.
+Doctor|Have you had any shortness of breath or fever?
+Patient|A little shortness of breath on the stairs. No fever.
+Doctor|Do you take any medications?
+Patient|I take metformin for my diabetes.
+Doctor|Your blood pressure today is one hundred and forty over ninety. I will order an ECG and some blood work, and I would like to see you again next week.
+Patient|Okay, thank you, doctor.
