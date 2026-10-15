@@ -36,5 +36,5 @@ def test_relative_paths_on_macos_use_the_shared_folder(tmp_path, monkeypatch):
     (tmp_path / "models" / "custom.gguf").write_bytes(b"x")
     path, downloadable = model_path.local_model_path("models/custom.gguf")
     assert os.path.normpath(path) == str(tmp_path / "models" / "custom.gguf") and downloadable is False
-    assert model_path.local_model_path("gemma2:2b-instruct-q8_0") == (
-        str(tmp_path / "models" / "gemma-2-2b-it-Q8_0.gguf"), True)
+    path, downloadable = model_path.local_model_path("gemma2:2b-instruct-q8_0")
+    assert os.path.normpath(path) == str(tmp_path / "models" / "gemma-2-2b-it-Q8_0.gguf") and downloadable is True
