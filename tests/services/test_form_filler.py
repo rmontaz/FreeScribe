@@ -85,7 +85,7 @@ class TestPrompts:
         group, prompt = batches[0]
         assert "1. Patient name (text)" in prompt
         assert "Date of visit: 2026-10-13" in prompt
-        assert "JSON" in prompt and "Never guess" in prompt
+        assert "JSON" in prompt and "better than a guess" in prompt
 
     def test_choice_and_checkbox_descriptions(self, fields):
         f = by_name(fields)

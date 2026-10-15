@@ -41,10 +41,12 @@ class FormFillWindow:
     :param talk: optional controller for talking through the form (see :class:`TalkPanel`);
         when given, the window offers "Talk to fill"
     :param from_session: True when ``values`` came from the session (False: the form opened blank)
+    :param profile: optional (get, save) pair for the clinician's saved details; when given the
+        window offers "Your details…" and fills the clinician boxes from them
     """
 
     def __init__(self, parent, pdf_path, fields, values, session_title="", on_saved=None,
-                 fill_path=None, converted=False, talk=None, from_session=True):
+                 fill_path=None, converted=False, talk=None, from_session=True, profile=None):
         self.parent = parent
         self.pdf_path = pdf_path
         self.fill_path = fill_path or pdf_path
@@ -58,6 +60,7 @@ class FormFillWindow:
         self.talk = talk
         self.from_session = from_session
         self.talk_panel = None
+        self.profile = profile
 
         self.window = tk.Toplevel(parent)
         self.window.title("Fill PDF form")
@@ -108,6 +111,11 @@ class FormFillWindow:
         self.show_empty = tk.BooleanVar(value=True)
         ttk.Checkbutton(controls, text="Show blank fields", variable=self.show_empty,
                         command=self._apply_filter).pack(side="left")
+        if self.profile is not None and any(f.role == ff.CLINICIAN for f in self.fields):
+            Button(controls, text="Your details…", icon_name="settings", variant="ghost", size="sm",
+                   command=self.edit_profile,
+                   tooltip="Your name, specialty and clinic details, used for the clinician boxes").pack(
+                side="left", padx=(Theme.px(12), 0))
         self.count_label = tk.Label(controls, bg=Palette.BG, fg=Palette.TEXT_MUTED, font=Theme.font("small"))
         self.count_label.pack(side="right")
 
@@ -198,6 +206,21 @@ class FormFillWindow:
         self.notice_label.configure(text=self._notice_text(filled, asked, talked=True))
         self._apply_filter()
         return changed
+
+    def edit_profile(self):
+        """Edit the clinician's saved details and put them into this form's clinician boxes."""
+        from UI.ClinicianProfileWindow import ClinicianProfileWindow
+        get, save = self.profile
+
+        def saved(details):
+            save(details)
+            values = ff.clinician_values(self.fields, details)
+            for row in self.rows:
+                if row.field.role == ff.CLINICIAN and row.field.name in values:
+                    row.set_value(values[row.field.name])
+            self._update_count()
+
+        ClinicianProfileWindow(self.window, get(), saved)
 
     def collect(self):
         """{field name: value} for every field, as :func:`fill_pdf` expects."""

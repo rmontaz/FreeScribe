@@ -37,6 +37,10 @@ from typing import Dict, List, Optional, Sequence, Tuple
 from pypdf import PdfReader, PdfWriter
 from pypdf.generic import ArrayObject, NameObject, TextStringObject
 
+# Field roles: who fills a field instead of the AI
+CLINICIAN = "clinician"   # the clinician's own details, from their saved profile
+PRIVATE = "private"       # identifiers, signatures, consent and contact details: left for a person
+
 # Field kinds
 TEXT = "text"
 CHECKBOX = "checkbox"
@@ -98,6 +102,8 @@ class FormField:
     top: float = 0.0          # position on the page, for ordering
     line: str = ""            # the printed line when it holds several fields ("from … to")
     box: Tuple[float, float] = (0.0, 0.0)  # width and height of the field on the page, in points
+    role: str = ""            # CLINICIAN (filled from the clinician's saved details), PRIVATE (left
+                              # for a person: IDs, signatures, contact details) or "" (asked of the AI)
 
     def describe(self) -> str:
         """How the field is described to the model."""
@@ -116,6 +122,8 @@ class FormField:
     def needs_answer(self) -> bool:
         """Whether to ask the model. Text the PDF already holds (a clinic address,
         say) is kept; choices are asked even when the PDF preselects one."""
+        if self.role:
+            return False      # never asked of the AI: see :func:`assign_roles`
         return self.kind != TEXT or not self.existing
 
     def labels(self) -> List[str]:
@@ -209,6 +217,13 @@ def read_form(path: str) -> List[FormField]:
 
     widgets = _collect_widgets(reader)
     lines_by_page: Dict[int, list] = {}
+    mupdf = _MuPdfText(path)
+
+    def lines_for(page_index):
+        if page_index not in lines_by_page:
+            lines = mupdf.lines(page_index)
+            lines_by_page[page_index] = lines if lines else _text_lines(reader.pages[page_index])
+        return lines_by_page[page_index]
 
     fields: List[FormField] = []
     for name, data in raw.items():
@@ -221,14 +236,23 @@ def read_form(path: str) -> List[FormField]:
 
         own_widgets = widgets.get(name, [])
         page, rect, _state = (own_widgets[0] if own_widgets else (0, None, None))
-        if page not in lines_by_page:
-            lines_by_page[page] = _text_lines(reader.pages[page])
         page_rects = [r for p, r in _all_rects(widgets) if p == page]
 
         kind, options, option_labels, on_state = _kind_of(data, flags)
-        label = _label_for(name, data, kind, rect, lines_by_page[page], page_rects)
+        widget_states = {state for _p, _r, state in own_widgets if state}
+        if kind == CHECKBOX and len(widget_states) > 1:
+            # Several tick boxes that are really one question (Male / Female, Y / N / U)
+            kind, options = RADIO, sorted({state.lstrip("/") for state in widget_states})
+        label = _label_for(name, data, kind, rect, lines_for(page), page_rects)
         if kind == RADIO:
-            options, option_labels = _radio_options(reader, own_widgets, options, lines_by_page, widgets)
+            options, option_labels = _radio_options(own_widgets, options, lines_for)
+        elif kind == CHECKBOX:
+            # A tick box often stores what it means ("Workplace Issues") while its tooltip
+            # is the shared question; say both
+            state = (on_state or "").lstrip("/")
+            if (_meaningful(state) and state.lower() not in _PLAIN_TICKS
+                    and state.lower() not in label.lower()):
+                label = f"{label.rstrip(' :')}: {state}"
         max_length = data.get("/MaxLen")
 
         fields.append(FormField(
@@ -255,8 +279,171 @@ def read_form(path: str) -> List[FormField]:
     if not fields:
         raise FormError("This PDF's form fields are all read-only or signatures, so there is nothing to fill.")
 
+    _fix_grid_options(fields, widgets)
+
     fields.sort(key=lambda f: (f.page, round(f.top / 6), _left_of(widgets, f.name)))
+    _number_repeats(fields)
+    assign_roles(fields)
     return fields
+
+
+_ROW_NUMBER = re.compile(r"\s*\((\d{1,2})\)\s*$")
+
+
+def _number_repeats(fields):
+    """
+    Number fields that repeat the same label, as on forms with one block per
+    condition ("Medical condition:" three times), so each copy reads "(1)", "(2)"…
+    like the rows of a table. A label that already ends in a row number and
+    repeats (a second table with the same columns) is marked as a later copy.
+    """
+    counts: Dict[str, int] = {}
+    for f in fields:
+        counts[f.label] = counts.get(f.label, 0) + 1
+    seen: Dict[str, int] = {}
+    for f in fields:
+        if counts[f.label] < 2 or f.line:
+            continue
+        seen[f.label] = seen.get(f.label, 0) + 1
+        k = seen[f.label]
+        if _ROW_NUMBER.search(f.label):
+            if k > 1:
+                f.label = f"{f.label}, table {k}"
+        else:
+            f.label = f"{f.label.rstrip()} ({k})"
+
+
+def row_of(field_: "FormField") -> Tuple[str, Optional[int]]:
+    """(label without its row number, row number) — e.g. ("Medication Name", 2); (label, None) otherwise."""
+    label = field_.label
+    table = ""
+    match = re.search(r", table (\d+)$", label)
+    if match:
+        table, label = f" [table {match.group(1)}]", label[:match.start()]
+    match = _ROW_NUMBER.search(label)
+    if not match:
+        return field_.label, None
+    return label[:match.start()].strip() + table, int(match.group(1))
+
+
+# ------------------------------------------------------------------ roles
+_PRIVATE_LABEL = re.compile(
+    r"social insurance|\bsin\b|social security|\bssn\b|health (?:card|insurance) (?:no|number|#)"
+    r"|\b(?:phn|ohip|ramq)\b|\bpolicy (?:no|number|#)|policy or group|group (?:plan |policy )?(?:no\b|number|#)"
+    r"|certificate (?:no|number|#)|certificate or|employee (?:identification|id)\b|identification (?:no|number|#)"
+    r"|member (?:id|no|number)|contract (?:no|number)|claim (?:no|number|#)|signature|consent|witness"
+    r"|https?://|\blink to\b|\bstamp\b|tax id|date signed|signed on", re.IGNORECASE)
+_CONTACT_LABEL = re.compile(
+    r"address|street|\bcity\b|province|\bstate\b|postal|\bzip\b|tele?phone|\bphone\b|\bcell\b|\bfax\b"
+    r"|e-?mail", re.IGNORECASE)
+_CLINICIAN_NAME = re.compile(
+    r"(?:attending|treating) physician(?!'?s? (?:questionnaire|statement|report))(?! \(\d)"
+    r"|physician'?s? (?:full )?name|name of (?:the )?(?:attending |treating )?(?:physician|doctor|clinician|"
+    r"practitioner|health (?:care )?professional)(?![\s_]*\d)|doctor'?s name|clinician'?s name",
+    re.IGNORECASE)
+_CLINICIAN_DETAIL = re.compile(
+    r"certified specialty|degree/specialty|^specialty$|specialty \(if|licen[cs]e (?:no|number|#)|"
+    r"registration (?:no|number|#)|billing (?:no|number|#)|\bcpso\b|college (?:no|number|#)|"
+    r"^(?:last|first|given|family) name(?:\(s\))?$|^(?:full )?name(?: \(print\))?$", re.IGNORECASE)
+
+
+def assign_roles(fields: Sequence["FormField"]) -> None:
+    """
+    Mark the text fields the AI must not fill. The clinician's name, specialty,
+    licence number and contact details (the block that follows "Attending
+    physician" and the like) come from the clinician's saved details; identifiers
+    (SIN, policy and certificate numbers), signatures, consent and other contact
+    details are left for a person. Small models invent these; the visit rarely
+    contains them.
+    """
+    block = 0          # fields left in the clinician's block
+    witness = 0        # fields left in a witness's block
+    previous = ""
+    for f in fields:
+        label = f.label
+        bare = _ROW_NUMBER.sub("", label).strip(" :")
+        if f.kind != TEXT:
+            previous = label
+            block = witness = 0
+            continue
+        declaration = re.match(r"\s*i am (?:a|the)\b", previous, re.IGNORECASE) and \
+            re.fullmatch(r"(?:full )?name(?: \(print\))?", bare, re.IGNORECASE)
+        person_detail = re.search(r"\bname|tele?phone|\bphone\b|\bdate\b", label, re.IGNORECASE)
+        if _CLINICIAN_NAME.search(label) or declaration:
+            f.role, block, witness = CLINICIAN, 12, 0
+        elif block and _CONTACT_LABEL.search(label):
+            f.role = CLINICIAN          # "Address and telephone number (or use a stamp)" too
+            block -= 1
+        elif block and _PRIVATE_LABEL.search(label):
+            f.role = PRIVATE            # "Tax ID", "Date signed" inside the block: keep going
+            block -= 1
+        elif block and _CLINICIAN_DETAIL.search(bare):
+            f.role = CLINICIAN
+            block -= 1
+        elif witness and person_detail:
+            f.role = PRIVATE            # the witness's other names, phone and date
+            witness -= 1
+        else:
+            block = witness = 0
+            if _PRIVATE_LABEL.search(label) or _CONTACT_LABEL.search(label):
+                f.role = PRIVATE
+                if re.search(r"witness", label, re.IGNORECASE):
+                    witness = 6
+            elif re.search(r"certified specialty|degree/specialty", label, re.IGNORECASE):
+                f.role = CLINICIAN
+        previous = label
+
+
+PROFILE_KEYS = ("name", "specialty", "licence", "street", "city", "province", "postal_code",
+                "phone", "fax", "email")
+
+
+def clinician_values(fields: Sequence["FormField"], profile: Dict[str, str]) -> Dict[str, str]:
+    """Values for the clinician's fields from their saved details (``PROFILE_KEYS``)."""
+    profile = {k: str((profile or {}).get(k) or "").strip() for k in PROFILE_KEYS}
+    names = [f for f in fields if f.role == CLINICIAN]
+    has_city = any(re.search(r"\bcity\b", f.label, re.IGNORECASE) for f in names)
+    place = ", ".join(p for p in (profile["city"], " ".join(
+        p for p in (profile["province"], profile["postal_code"]) if p)) if p)
+    full_address = ", ".join(p for p in (profile["street"], place) if p)
+    values = {}
+    for f in names:
+        label = f.label.lower()
+        parts = profile["name"].split()
+        if "address" in label and re.search(r"tele?phone|phone", label):
+            value = "\n".join(p for p in (full_address, profile["phone"] and f"Tel. {profile['phone']}",
+                                          profile["fax"] and f"Fax {profile['fax']}") if p)
+        elif "address" in label and "e-mail" not in label and "email" not in label:
+            # "Address (street, city, province, postal code)" wants all of it
+            value = full_address if (re.search(r"city|postal|province", label) or not has_city) \
+                else profile["street"]
+        elif re.search(r"e-?mail", label):
+            value = profile["email"]
+        elif re.search(r"\bfax\b", label):
+            value = profile["fax"]
+        elif re.search(r"tele?phone|\bphone\b|\bcell\b", label):
+            value = profile["phone"]
+        elif re.search(r"postal|\bzip\b", label):
+            value = profile["postal_code"]
+        elif re.search(r"\bcity\b", label):
+            value = profile["city"]
+        elif re.search(r"province|\bstate\b", label):
+            value = profile["province"]
+        elif re.search(r"address|street", label):
+            value = profile["street"] if has_city else full_address
+        elif re.search(r"specialty|degree", label):
+            value = profile["specialty"]
+        elif re.search(r"licen[cs]e|registration|billing|cpso|college", label):
+            value = profile["licence"]
+        elif re.match(r"\s*(?:last|family) name", label):
+            value = parts[-1] if parts else ""
+        elif re.match(r"\s*(?:first|given) name", label):
+            value = parts[0] if parts else ""
+        else:
+            value = profile["name"]
+        if value:
+            values[f.name] = value[:f.max_length] if f.max_length else value
+    return values
 
 
 def _collect_widgets(reader) -> Dict[str, List[Tuple[int, tuple, Optional[str]]]]:
@@ -331,27 +518,79 @@ def _kind_of(data, flags):
     return TEXT, [], [], ""
 
 
-def _radio_options(reader, own_widgets, options, lines_by_page, widgets):
-    """Each radio button's stored value and the words printed beside it."""
-    values, labels = [], []
+# Option values that say nothing about the option ("0", "Choice1", "On")
+_OPAQUE = re.compile(r"^(?:\d+|choice\s*\d+|opt(?:ion)?\s*\d+|(?:button|radio|group|check)\s*\d*|on|off|[a-z])$",
+                     re.IGNORECASE)
+# One-letter values that are clear when the whole set is one of these
+_ABBREVIATIONS = {"y": "Yes", "n": "No", "u": "Unknown", "m": "Male", "f": "Female"}
+# Tick-box values that only mean "ticked"
+_PLAIN_TICKS = {"yes", "no", "true", "false", "x", "checked", "oui", "si", "ok", "selected"}
+
+
+def _meaningful(value: str) -> bool:
+    value = (value or "").strip()
+    return bool(value) and not _OPAQUE.match(value)
+
+
+def _radio_options(own_widgets, options, lines_for):
+    """Each radio button's stored value and what it is called."""
+    values, printed = [], []
     for page, rect, state in own_widgets:
         if not state:
             continue
         value = state.lstrip("/")
         if value in values:
             continue
-        if page not in lines_by_page:
-            lines_by_page[page] = _text_lines(reader.pages[page])
-        same_line = [line for line in lines_by_page[page] if rect[1] - 3 <= line["y"] <= rect[3] + 1]
-        label = _right_text(same_line, rect[2])
+        same_line = [line for line in lines_for(page) if rect[1] - 3 <= line["y"] <= rect[3] + 1]
         values.append(value)
-        labels.append(label[:40] if label else value)
+        printed.append((_right_text(same_line, rect[2]) or "")[:40])
     if not values:
         return options, list(options)
-    # Page words are only useful when they tell the buttons apart
-    if len(set(labels)) != len(labels):
-        labels = list(values)
-    return values, labels
+    if all(_meaningful(v) for v in values):
+        # The PDF's own names ("Yes", "No", "Moderate") beat nearby page words,
+        # which often belong to the next column
+        return values, list(values)
+    if all(v.lower() in _ABBREVIATIONS for v in values) and len({v.lower() for v in values}) == len(values):
+        return values, [_ABBREVIATIONS[v.lower()] for v in values]
+    # Opaque values ("0", "1"): the words printed beside each button, when they tell them apart
+    if all(printed) and len(set(printed)) == len(printed):
+        return values, printed
+    return values, list(values)
+
+
+def _fix_grid_options(fields, widgets):
+    """
+    In a rating grid ("No impact / Mild / Moderate / Severe" for each row), a row's
+    first option is sometimes stored under the row's own name ("Decision Making").
+    Name such an option after the option in the same column of the other rows.
+    """
+    columns: Dict[Tuple[int, int], Dict[str, int]] = {}
+    positions = {}
+    for f in fields:
+        if f.kind != RADIO:
+            continue
+        for page, rect, state in widgets.get(f.name, []):
+            if not state:
+                continue
+            value = state.lstrip("/")
+            key = (page, round(rect[0] / 6))
+            positions[(f.name, value)] = key
+            label = f.option_label(value)
+            counts = columns.setdefault(key, {})
+            counts[label] = counts.get(label, 0) + 1
+    for f in fields:
+        if f.kind != RADIO or len(f.option_labels) != len(f.options):
+            continue
+        own = f.label.strip(" :").lower()
+        for i, label in enumerate(f.option_labels):
+            if label.strip(" :").lower() != own:
+                continue
+            counts = dict(columns.get(positions.get((f.name, f.options[i])), {}))
+            counts.pop(label, None)
+            if counts:
+                best = max(counts, key=counts.get)
+                if counts[best] >= 2 and best not in f.option_labels:
+                    f.option_labels[i] = best
 
 
 def _existing_value(data, kind) -> str:
@@ -365,6 +604,75 @@ def _existing_value(data, kind) -> str:
 
 
 # --------------------------------------------------------------- page labels
+class _MuPdfText:
+    """
+    Page words with their positions, from PyMuPDF. Unlike pypdf's text visitor it
+    places words drawn inside embedded drawings (Form XObjects) correctly, which
+    government forms such as the CPP disability report use for all their text.
+    """
+
+    def __init__(self, path):
+        self.doc = None
+        try:
+            import pymupdf
+            try:
+                pymupdf.TOOLS.mupdf_display_errors(False)
+            except Exception:
+                pass
+            doc = pymupdf.open(path)
+            if doc.needs_pass and not doc.authenticate(""):
+                return
+            self.doc = doc
+        except Exception:
+            self.doc = None
+
+    def lines(self, index) -> Optional[List[dict]]:
+        if self.doc is None or index >= len(self.doc):
+            return None
+        try:
+            import pymupdf
+            page = self.doc[index]
+            words = page.get_text("words")
+            to_pdf = ~page.transformation_matrix   # PyMuPDF's top-left coordinates -> PDF user space
+        except Exception:
+            return None
+        runs: Dict[tuple, list] = {}
+        for x0, y0, x1, y1, text, block, line_no, _word in words:
+            box = pymupdf.Rect(x0, y0, x1, y1) * to_pdf
+            runs.setdefault((block, line_no), []).append((box, text))
+        fragments = []
+        for items in runs.values():
+            items.sort(key=lambda item: item[0].x0)
+            current = None
+            for box, text in items:
+                height = box.height or 10.0
+                if current and box.x0 - current[1] <= height * 0.6 and abs(box.y0 - current[2]) <= height * 0.5:
+                    current[3] += " " + text
+                    current[1] = box.x1
+                else:
+                    if current:
+                        fragments.append(current)
+                    current = [box.x0, box.x1, box.y0, text, height]
+            if current:
+                fragments.append(current)
+        # (x, baseline y, text, font size) as pypdf's visitor reports them
+        return _group_lines([(x0, y0 + 0.2 * h, text, h / 1.2) for x0, _x1, y0, text, h in fragments])
+
+
+def _group_lines(fragments) -> List[dict]:
+    lines: List[dict] = []
+    for x, y, text, size in sorted(fragments, key=lambda f: (-f[1], f[0])):
+        for line in lines:
+            if abs(line["y"] - y) <= 2.5:
+                line["fragments"].append((x, text, size))
+                break
+        else:
+            lines.append({"y": y, "fragments": [(x, text, size)]})
+    for line in lines:
+        line["fragments"].sort()
+    return lines
+
+
 def _text_lines(page) -> List[dict]:
     """Text fragments of ``page`` grouped into lines: [{y, fragments: [(x, text, size)]}]."""
     fragments = []
@@ -384,17 +692,7 @@ def _text_lines(page) -> List[dict]:
     except Exception:
         return []
 
-    lines: List[dict] = []
-    for x, y, text, size in sorted(fragments, key=lambda f: (-f[1], f[0])):
-        for line in lines:
-            if abs(line["y"] - y) <= 2.5:
-                line["fragments"].append((x, text, size))
-                break
-        else:
-            lines.append({"y": y, "fragments": [(x, text, size)]})
-    for line in lines:
-        line["fragments"].sort()
-    return lines
+    return _group_lines(fragments)
 
 
 def _approx_width(text, size):
@@ -405,6 +703,10 @@ def _label_for(name, data, kind, rect, lines, page_rects) -> str:
     tooltip = str(data.get("/TU") or "").strip()
     if tooltip:
         return tooltip
+    return _printed_label(kind, rect, lines, page_rects) or _clean_name(name)
+
+
+def _printed_label(kind, rect, lines, page_rects) -> str:
     if rect is not None and lines:
         x0, y0, x1, y1 = rect
         height = y1 - y0
@@ -433,7 +735,7 @@ def _label_for(name, data, kind, rect, lines, page_rects) -> str:
         above = _above_text(lines, x0, x1, y1)
         if above:
             return above
-    return _clean_name(name)
+    return ""
 
 
 def _left_text(lines, x0, page_rects, rect) -> str:
@@ -597,38 +899,130 @@ def compose_source(title: str = "", note: str = "", context: str = "", transcrip
     return fixed[:max_chars]
 
 
+def plan_batches(fields: Sequence[FormField], per_prompt: int = FIELDS_PER_PROMPT) -> List[List[FormField]]:
+    """
+    Split ``fields`` into groups of about ``per_prompt``, never splitting the
+    row of a table ("Medication Name (2)", "Dosage (2)", …), so the model sees a
+    whole row at once.
+    """
+    units: List[List[FormField]] = []
+    for f in fields:
+        row = row_of(f)[1]
+        if units and row is not None and row_of(units[-1][-1])[1] == row and len(units[-1]) < 12:
+            units[-1].append(f)
+        else:
+            units.append([f])
+    batches: List[List[FormField]] = []
+    for unit in units:
+        if batches and len(batches[-1]) + len(unit) <= per_prompt:
+            batches[-1].extend(unit)
+        else:
+            batches.append(list(unit))
+    return batches
+
+
+def earlier_answers(group: Sequence[FormField], fields: Sequence[FormField],
+                    values: Dict[str, str], limit: int = 14) -> List[Tuple[str, str]]:
+    """
+    Answers already given to earlier rows of the tables ``group`` belongs to, as
+    (label, value), so the model puts a different item in each row.
+    """
+    tables = {row_of(f)[0] for f in group if row_of(f)[1] is not None}
+    if not tables:
+        return []
+    inside = {f.name for f in group}
+    found = []
+    for f in fields:
+        if f.name in inside or not values.get(f.name):
+            continue
+        base, row = row_of(f)
+        if row is not None and base in tables:
+            shown = f.option_label(values[f.name]) if f.kind in (RADIO, CHOICE) else values[f.name]
+            found.append((f.label, shown if f.kind != CHECKBOX else "yes"))
+    return found[-limit:]
+
+
+PROMPT_RULES = (
+    "How to answer:\n"
+    "1. Use only facts stated in the visit information. If it does not give the answer, use \"\". "
+    "An empty answer is always better than a guess.\n"
+    "2. Write each answer as a clinician would on a paper form: short clinical wording. Do not copy "
+    "sentences from the conversation and do not write \"you\" or \"I\".\n"
+    "3. Put each fact only in the field that asks for it. Read each field's label carefully: a "
+    "diagnosis field gets only the diagnosis, a date field only the date.\n"
+    "4. For a field with choices, answer with exactly one of the listed choices, or \"\". For a "
+    "checkbox, answer \"yes\" only when the visit information clearly says it applies; otherwise \"\".\n"
+    "5. Write dates as YYYY-MM-DD, or YYYY-MM when only the month is known.\n"
+    "6. Fields numbered (1), (2), (3)… are rows of one table or copies of one section: put a different "
+    "item in each, in order, and leave the extra ones \"\". Never repeat an item that is already in "
+    "an earlier row.\n"
+    "7. When a field asks for two things (for example a dose and a date), give both.\n"
+    "8. Placeholders like {{PHONE-1}} stand for real details. Copy them exactly where they belong.\n"
+    "9. What the clinician said for this form, when given, comes first."
+)
+
+
+def build_prompt(group: Sequence[FormField], source: str, form_title: str = "",
+                 earlier: Sequence[Tuple[str, str]] = ()) -> str:
+    """The prompt that asks the model for the fields in ``group``."""
+    lines = [f"{i}. {f.describe()}" for i, f in enumerate(group, 1)]
+    example = ", ".join(f'"{i}": ""' for i in range(1, min(len(group), 3) + 1))
+    done = ""
+    if earlier:
+        done = ("Already filled in earlier rows (do not repeat these items):\n"
+                + "\n".join(f"- {label}: {value}" for label, value in earlier) + "\n\n")
+    title = f" titled “{form_title}”" if form_title else ""
+    return (
+        f"You are filling in a medical form{title} for a clinician, using only the visit "
+        "information below.\n\n"
+        f"{PROMPT_RULES}\n\n"
+        f"Visit information:\n<<<\n{source}\n>>>\n\n"
+        f"{done}"
+        "Fields:\n" + "\n".join(lines) + "\n\n"
+        "Reply with only a JSON object that maps each field number to its answer, for example "
+        f"{{{example}}}."
+    )
+
+
 def build_prompts(fields: Sequence[FormField], source: str, form_title: str = "",
                   per_prompt: int = FIELDS_PER_PROMPT) -> List[Tuple[List[FormField], str]]:
-    """Split ``fields`` into evenly sized groups of at most ``per_prompt`` and build one prompt per group."""
-    batches = []
-    count = len(fields)
-    groups = max(1, -(-count // per_prompt))
-    size = -(-count // groups) if count else per_prompt
-    for start in range(0, count, size):
-        group = list(fields[start:start + size])
-        lines = [f"{i}. {f.describe()}" for i, f in enumerate(group, 1)]
-        example = ", ".join(f'"{i}": ""' for i in range(1, min(len(group), 3) + 1))
-        prompt = (
-            f"You are helping a clinician fill in a form{f' titled “{form_title}”' if form_title else ''}. "
-            "Use only the visit information below.\n\n"
-            "Rules:\n"
-            "- Use only facts stated in the visit information. Never guess or invent anything.\n"
-            "- If the visit information does not give the answer, use an empty string \"\".\n"
-            "- For a field with choices, answer with exactly one of the listed choices, or \"\".\n"
-            "- For a checkbox, answer \"yes\" or \"no\", or \"\" if it is not clear.\n"
-            "- Placeholders like {{PHONE-1}} stand for real details. Copy them exactly where they belong.\n"
-            "- Write only what each field asks for, as briefly as on a paper form. "
-            "Never copy the whole note into a field.\n"
-            "- When a line has several fields (for example a date range \"from … to\"), "
-            "give each field only its own part.\n"
-            "- What the clinician said for this form, when given, comes first.\n\n"
-            f"Visit information:\n<<<\n{source}\n>>>\n\n"
-            "Fields:\n" + "\n".join(lines) + "\n\n"
-            "Reply with only a JSON object that maps each field number to its value, for example "
-            f"{{{example}}}."
-        )
-        batches.append((group, prompt))
-    return batches
+    """One prompt per group of fields (see :func:`plan_batches`), without earlier answers."""
+    return [(group, build_prompt(group, source, form_title)) for group in plan_batches(fields, per_prompt)]
+
+
+def drop_repeats(fields: Sequence[FormField], values: Dict[str, str]) -> Dict[str, str]:
+    """
+    Blank rows that repeat an earlier row. Small models fill every row of a
+    table with the same medication; a later row whose first answer matches an
+    earlier row's first answer (same column) is cleared as a whole.
+    """
+    def key(value):
+        return re.sub(r"[^a-z0-9]+", " ", (value or "").lower()).strip()
+
+    values = dict(values)
+    rows: List[List[FormField]] = []
+    for f in fields:
+        row = row_of(f)[1]
+        if rows and row is not None and row_of(rows[-1][-1])[1] == row:
+            rows[-1].append(f)
+        elif row is not None:
+            rows.append([f])
+    seen: Dict[str, List[str]] = {}
+    for row in rows:
+        first = next((f for f in row if f.kind == TEXT), None)
+        if first is None:
+            continue
+        column = row_of(first)[0].split(" [table")[0]
+        value = key(values.get(first.name))
+        if not value:
+            continue
+        earlier = seen.setdefault(column, [])
+        if any(value == e or (len(value) > 3 and (value in e or e in value)) for e in earlier):
+            for f in row:
+                values[f.name] = ""
+        else:
+            earlier.append(value)
+    return values
 
 
 def parse_answers(reply: str, count: int) -> Dict[int, str]:
@@ -721,9 +1115,70 @@ def normalize(field_: FormField, answer: str) -> str:
         answer = " ".join(answer.split())
     if field_.line:
         answer = _own_part(field_, answer)
+    answer = format_dates(answer, date_format(field_.label, field_.max_length))
     if field_.max_length:
         answer = answer[:field_.max_length]
     return answer
+
+
+_MONTHS = {m: i for i, m in enumerate(("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct",
+                                       "nov", "dec"), 1)}
+
+
+def date_format(label: str, max_length: Optional[int] = None) -> Optional[str]:
+    """
+    The date layout a field asks for, as a ``strftime`` pattern ("%d/%m/%Y"), from
+    hints such as "(dd/mm/yyyy)" or "Enter 4 digit year and 2 digit month"; None
+    when the label says nothing.
+    """
+    low = label.lower()
+    match = re.search(r"\b(dd|mm)\s*([/\-. ])\s*(mm|dd)\s*[/\-. ]\s*y{2,4}\b", low)
+    if match:
+        sep = match.group(2)
+        return f"%d{sep}%m{sep}%Y" if match.group(1) == "dd" else f"%m{sep}%d{sep}%Y"
+    match = re.search(r"\by{4}\s*([/\-. ]?)\s*mm(?:\s*[/\-. ]?\s*dd)?\b", low)
+    if match:
+        sep = match.group(1) or ("" if max_length in (6, 8) else "-")
+        return f"%Y{sep}%m{sep}%d" if "dd" in match.group(0) else f"%Y{sep}%m"
+    if re.search(r"4[- ]digit year,? (?:and )?2[- ]digit month(?:,? and 2[- ]digit day)?|year,? month,? (?:and )?day",
+                 low):
+        sep = "" if max_length in (6, 8) else "-"
+        return f"%Y{sep}%m{sep}%d" if re.search(r"day", low) else f"%Y{sep}%m"
+    return None
+
+
+def format_dates(text: str, layout: Optional[str]) -> str:
+    """
+    Rewrite the dates in ``text`` (as the model writes them: 2026-10-15, 2026-10,
+    "October 15, 2026") in ``layout``. Text without such dates is left alone, and
+    so is everything when ``layout`` is None.
+    """
+    if not layout or not text:
+        return text
+    month_only = "%d" not in layout
+
+    def out(year, month, day):
+        try:
+            if day is None or month_only:
+                if month_only:
+                    return _dt.date(year, month, 1).strftime(layout)
+                return None   # the field wants a day the answer does not have
+            return _dt.date(year, month, day).strftime(layout)
+        except ValueError:
+            return None
+
+    def iso(match):
+        year, month, day = int(match.group(1)), int(match.group(2)), match.group(3)
+        return out(year, month, int(day) if day else None) or match.group(0)
+
+    text = re.sub(r"\b(\d{4})-(\d{1,2})(?:-(\d{1,2}))?\b", iso, text)
+
+    def words(match):
+        month = _MONTHS.get(match.group(1)[:3].lower())
+        return (out(int(match.group(3)), month, int(match.group(2))) if month else None) or match.group(0)
+
+    text = re.sub(r"\b([A-Za-z]{3,9})\.? (\d{1,2})(?:st|nd|rd|th)?,? (\d{4})\b", words, text)
+    return text
 
 
 def _own_part(field_: FormField, answer: str) -> str:

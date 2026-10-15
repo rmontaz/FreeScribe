@@ -153,6 +153,7 @@ class SettingsWindow():
             SettingsKeys.BROWSER_EXTENSION.value: False,
             SettingsKeys.BROWSER_EXTENSION_PORT.value: 52617,
             SettingsKeys.BROWSER_EXTENSION_CODE.value: "",
+            SettingsKeys.CLINICIAN_PROFILE.value: {},
         }
 
     def __init__(self):

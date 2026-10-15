@@ -41,6 +41,7 @@ class SettingsKeys(Enum):
     BROWSER_EXTENSION = "Browser Extension"
     BROWSER_EXTENSION_PORT = "Browser Extension Port"
     BROWSER_EXTENSION_CODE = "Browser Extension Code"
+    CLINICIAN_PROFILE = "Clinician Profile"
 
 class Architectures(Enum):
     CPU = ("CPU", "cpu")

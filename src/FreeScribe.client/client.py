@@ -2081,11 +2081,14 @@ def _ask_form_values(asked, source, mapping, form_title, cancel_event=None, prog
     done = 0
     local = bool(app_settings.editable_settings.get(SettingsKeys.LOCAL_LLM.value, False))
     per_prompt = form_filler.FIELDS_PER_PROMPT_LOCAL if local else form_filler.FIELDS_PER_PROMPT
-    for group, prompt in form_filler.build_prompts(asked, source, form_title, per_prompt=per_prompt):
+    for group in form_filler.plan_batches(asked, per_prompt):
         if cancel_event is not None and cancel_event.is_set():
             break
         if progress is not None:
             progress(done, len(group), len(asked))
+        # Earlier rows of the same table are shown, so each row gets a different item
+        earlier = form_filler.earlier_answers(group, asked, values)
+        prompt = form_filler.build_prompt(group, source, form_title, earlier)
         try:
             reply = send_text_to_chatgpt(prompt, cancel_event)
         except Exception as e:
@@ -2102,7 +2105,7 @@ def _ask_form_values(asked, source, mapping, form_title, cancel_event=None, prog
             value = form_filler.restore(answers.get(number, ""), mapping)
             values[field.name] = form_filler.normalize(field, value)
         done += len(group)
-    return values, problems
+    return form_filler.drop_repeats(asked, values), problems
 
 
 def _fill_form_thread(prepared, asked, source, mapping, form_title, session_title, session_id=None):
@@ -2174,10 +2177,29 @@ def _show_form_review(prepared, values, session_title, session_id=None, from_ses
         if storing_notes_locally():
             save_notes_history()
 
+    # The clinician's own boxes come from their saved details, never from the AI
+    values = dict(values)
+    for name, value in form_filler.clinician_values(prepared.fields, clinician_profile()).items():
+        if not values.get(name):
+            values[name] = value
+
     review["window"] = FormFillWindow(root, prepared.original_path, prepared.fields, values,
                                       session_title=session_title, on_saved=on_saved,
                                       fill_path=prepared.fill_path, converted=prepared.converted,
-                                      talk=FormTalk(prepared, form_title, session_id), from_session=from_session)
+                                      talk=FormTalk(prepared, form_title, session_id), from_session=from_session,
+                                      profile=(clinician_profile, save_clinician_profile))
+
+
+def clinician_profile():
+    """The clinician's saved details for forms ({} until saved)."""
+    profile = app_settings.editable_settings.get(SettingsKeys.CLINICIAN_PROFILE.value)
+    return dict(profile) if isinstance(profile, dict) else {}
+
+
+def save_clinician_profile(details):
+    app_settings.editable_settings[SettingsKeys.CLINICIAN_PROFILE.value] = {
+        k: str(v).strip() for k, v in (details or {}).items() if str(v).strip()}
+    app_settings.save_settings_to_file()
 
 
 def transcribe_audio(audio):
