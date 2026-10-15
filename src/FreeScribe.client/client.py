@@ -66,6 +66,7 @@ from Model import ModelStatus
 from services.whisper_hallucination_cleaner import hallucination_cleaner
 from utils.whisper.WhisperModel import load_stt_model, faster_whisper_transcribe, is_whisper_valid, is_whisper_lock, load_model_with_loading_screen, unload_stt_model, get_model_from_settings, WhisperModelStatus, get_whisper_model, set_whisper_model
 from services.factual_consistency import find_factual_inconsistency
+from services.note_text import plain_note
 import utils.arg_parser
 from services.whisper_hallucination_cleaner import hallucination_cleaner, load_hallucination_cleaner_model
 from utils.log_config import logger
@@ -1479,7 +1480,9 @@ def update_gui_with_response(response_text):
                 report_error(f"The note could not be created. {describe_llm_error(text)}")
             return
 
-        workspace.apply_note(generation_session_id, text.strip(), NoteStyleSelector.current_style)
+        # Models write markdown (**Subjective:**, * bullets); keep the note as plain text
+        text = plain_note(text)
+        workspace.apply_note(generation_session_id, text, NoteStyleSelector.current_style)
         if storing_notes_locally():
             save_notes_history()
 
@@ -2002,7 +2005,7 @@ def generate_document(template_name):
     session_id = session.id
 
     def on_success(text):
-        workspace.add_document(session_id, title, template_name, text)
+        workspace.add_document(session_id, title, template_name, plain_note(text))
         if storing_notes_locally():
             save_notes_history()
         workspace.toast(f"{title} created")

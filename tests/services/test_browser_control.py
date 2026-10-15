@@ -139,3 +139,11 @@ def test_server_refuses_strangers(server):
     assert call(srv, "/api/status", origin="https://evil.example")[0] == 403      # web pages are refused
     assert call(srv, "/api/status", host="evil.example:80")[0] == 403             # DNS rebinding
     assert call(srv, "/api/nothing")[0] == 404
+
+
+def test_plain_note_removes_asterisks():
+    from services.note_text import plain_note
+    note = ("**SOAP Note**\n\n**Subjective:**\n* Chest pain for three days.\n*   Takes *metformin*.\n"
+            "  * nested point\n\n**Plan:** ECG.\n*\nBP 140/90, 2*3 tabs")
+    assert plain_note(note) == ("SOAP Note\n\nSubjective:\n- Chest pain for three days.\n- Takes metformin.\n"
+                                "  - nested point\n\nPlan: ECG.\n\nBP 140/90, 2*3 tabs")

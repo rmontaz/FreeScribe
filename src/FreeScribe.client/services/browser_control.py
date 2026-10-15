@@ -18,6 +18,8 @@ This software is released under the AGPL-3.0 license.
 from __future__ import annotations
 
 import re
+
+from services.note_text import plain_note
 from dataclasses import dataclass
 from typing import Callable, Optional
 
@@ -43,19 +45,8 @@ class AppState:
 
 
 def note_for_emr(note: str) -> str:
-    """
-    The note as plain text for an EMR text box: markdown marks are removed and
-    headings become plain lines, so OSCAR shows it as written.
-    """
-    text = (note or "").replace("\r\n", "\n")
-    text = re.sub(r"^```\w*\s*$", "", text, flags=re.MULTILINE)        # code fences
-    text = re.sub(r"^\s{0,3}#{1,6}\s*", "", text, flags=re.MULTILINE)  # # Heading
-    text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)                       # **bold**
-    text = re.sub(r"__(.+?)__", r"\1", text)
-    text = re.sub(r"(?<![\w*])\*(?!\s)(.+?)(?<!\s)\*(?![\w*])", r"\1", text)   # *italic*
-    text = re.sub(r"^(\s*)[*•]\s+", r"\1- ", text, flags=re.MULTILINE)  # bullets as "- "
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
+    """The note as plain text for an EMR text box (see :func:`services.note_text.plain_note`)."""
+    return plain_note(note)
 
 
 class VisitControl:
