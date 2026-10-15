@@ -1,0 +1,40 @@
+{
+  "manifest_version": 3,
+  "name": "FreeScribe for OSCAR",
+  "version": "1.0.0",
+  "description": "Control FreeScribe during a visit and put the finished note into OSCAR (or any EMR) with one click. Talks only to FreeScribe on this computer.",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_title": "FreeScribe",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "options_page": "options.html",
+  "permissions": ["storage", "activeTab", "scripting", "contextMenus", "notifications", "alarms"],
+  "host_permissions": ["http://127.0.0.1/*", "http://localhost/*"],
+  "commands": {
+    "toggle-recording": {
+      "suggested_key": { "default": "Alt+Shift+R" },
+      "description": "Start recording, or stop and write the note"
+    },
+    "pause-resume": {
+      "suggested_key": { "default": "Alt+Shift+P" },
+      "description": "Pause or resume the recording"
+    },
+    "insert-note": {
+      "suggested_key": { "default": "Alt+Shift+N" },
+      "description": "Insert the note where the cursor is in the EMR"
+    }
+  }
+}

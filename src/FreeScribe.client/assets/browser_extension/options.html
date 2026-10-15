@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>FreeScribe for OSCAR: setup</title>
+  <link rel="stylesheet" href="popup.css">
+  <style>
+    body { width: auto; max-width: 560px; margin: 32px auto; padding: 0 16px; }
+    h1 { font-size: 20px; margin: 0 0 4px; display: flex; align-items: center; gap: 10px; }
+    h2 { font-size: 14px; margin: 24px 0 6px; }
+    ol { padding-left: 20px; color: var(--muted); }
+    li { margin: 4px 0; }
+    .box { border: 1px solid var(--border); border-radius: 10px; padding: 14px; background: var(--surface); margin-top: 14px; }
+    .inline { display: flex; gap: 8px; align-items: end; }
+    .inline > div { flex: 1; }
+    #port { width: 110px; }
+    kbd { background: var(--raised); border-radius: 4px; padding: 1px 5px; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <h1><img src="icons/icon48.png" alt="" width="32" height="32"> FreeScribe for OSCAR</h1>
+  <p class="muted">Control FreeScribe during a visit and put the finished note into OSCAR (or any web EMR).
+    The extension talks only to FreeScribe on this computer and keeps no notes.</p>
+
+  <div class="box">
+    <div class="inline">
+      <div>
+        <label for="code">Pairing code</label>
+        <input id="code" type="text" placeholder="XXXX-XXXX-XXXX-XXXX" autocomplete="off" spellcheck="false">
+      </div>
+      <div style="flex: 0">
+        <label for="port">Port</label>
+        <input id="port" type="text" inputmode="numeric">
+      </div>
+    </div>
+    <p class="hint">In FreeScribe, click <b>Chrome extension</b> in the sidebar, turn it on and copy the code.
+      Leave the port as it is unless you changed it in FreeScribe.</p>
+    <div class="row" style="margin-top: 10px">
+      <button id="save" class="primary">Save and test</button>
+    </div>
+    <p id="result" class="message" hidden></p>
+  </div>
+
+  <h2>Using it during a visit</h2>
+  <ol>
+    <li>Open the patient's chart in OSCAR. Press <kbd id="k-toggle">Alt+Shift+R</kbd> (or the FreeScribe button) to start recording.</li>
+    <li>At the end, press it again: FreeScribe stops, transcribes and writes the note.</li>
+    <li>Click in the encounter note box where the note should go, then press <kbd id="k-insert">Alt+Shift+N</kbd> (or <b>Insert into EMR</b> in the FreeScribe button). Check the note before you sign it.</li>
+    <li>Select text in the chart (a medication list, a past history) and right-click <b>Add to FreeScribe visit context</b> to give the AI that background.</li>
+  </ol>
+  <p class="hint">Change the shortcuts at <a href="#" id="shortcuts">chrome://extensions/shortcuts</a>.</p>
+
+  <script src="shared.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>

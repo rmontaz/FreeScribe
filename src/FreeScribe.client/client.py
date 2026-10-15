@@ -2652,6 +2652,133 @@ def get_transcription_language():
 
 window.load_main_window()
 
+
+# ------------------------------------------------------------------ Chrome extension
+# The FreeScribe Chrome extension controls recording and fetches the note over a
+# connection that only this computer can reach, paired by a code (see
+# services/extension_server.py and the "Chrome extension" tool in the sidebar).
+extension_server = None
+extension_server_error = ""
+
+
+def _extension_state():
+    from services.browser_control import AppState
+    session = workspace.current
+    return AppState(
+        recording=bool(is_recording), paused=bool(is_paused), busy=workspace.busy_text or "",
+        session_id=session.id if session else "", title=session.display_title if session else "",
+        transcript=session.transcript if session else "", note=session.note if session else "",
+        context=session.context if session else "", writes_note=not is_transcribe_only())
+
+
+def _extension_code():
+    return str(app_settings.editable_settings.get(SettingsKeys.BROWSER_EXTENSION_CODE.value) or "")
+
+
+def _extension_settings_changed():
+    app_settings.save_settings_to_file()
+
+
+def start_extension_server():
+    """Starts (or stops) the connection for the Chrome extension to match the settings."""
+    global extension_server, extension_server_error
+    from services.extension_server import ExtensionServer, DEFAULT_PORT, new_code
+    from services.browser_control import VisitControl, ControlError
+    settings = app_settings.editable_settings
+    enabled = bool(settings.get(SettingsKeys.BROWSER_EXTENSION.value))
+    try:
+        port = int(settings.get(SettingsKeys.BROWSER_EXTENSION_PORT.value) or DEFAULT_PORT)
+    except (TypeError, ValueError):
+        port = DEFAULT_PORT
+    if extension_server is not None and (not enabled or extension_server.requested_port != port):
+        extension_server.stop()
+        extension_server = None
+    extension_server_error = ""
+    if not enabled:
+        return
+    if not _extension_code():
+        settings[SettingsKeys.BROWSER_EXTENSION_CODE.value] = new_code()
+        _extension_settings_changed()
+    if extension_server is None:
+        control = VisitControl(
+            state=_extension_state,
+            start=lambda: run_on_ui(threaded_toggle_recording),
+            stop=lambda: run_on_ui(threaded_toggle_recording),
+            pause=toggle_pause,
+            resume=toggle_pause,
+            add_context=lambda text: run_on_ui(workspace.append_context, text),
+            version=get_application_version())
+        extension_server = ExtensionServer(
+            port, code=_extension_code,
+            get_routes={"/api/status": control.status, "/api/note": control.note},
+            post_routes={"/api/record": control.record, "/api/context": control.context},
+            user_errors=(ControlError,))
+    try:
+        extension_server.start()
+    except OSError as error:
+        logger.exception(f"The Chrome extension connection could not start: {error}")
+        extension_server_error = (f"Port {port} is in use by another program. Close it, or change "
+                                  "“Browser Extension Port” in FreeScribe and the extension.")
+        extension_server = None
+
+
+def _extension_folder_for_chrome():
+    """
+    A copy of the extension in the home folder, where Chrome's "Load unpacked" can find
+    it (the installed app's own folder is hidden inside the app on a Mac).
+    """
+    import shutil
+    source = get_file_path('assets', 'browser_extension')
+    target = os.path.join(os.path.expanduser("~"), "FreeScribe Chrome Extension")
+    if os.path.isdir(target):
+        shutil.rmtree(target, ignore_errors=True)
+    shutil.copytree(source, target)
+    return target
+
+
+def open_browser_extension():
+    """The "Chrome extension" window: switch the connection on, pairing code, setup steps."""
+    from UI.ExtensionWindow import ExtensionWindow
+    from services.extension_server import new_code
+
+    def state():
+        return {"enabled": bool(app_settings.editable_settings.get(SettingsKeys.BROWSER_EXTENSION.value)),
+                "code": _extension_code(),
+                "port": extension_server.port if extension_server else
+                app_settings.editable_settings.get(SettingsKeys.BROWSER_EXTENSION_PORT.value),
+                "running": bool(extension_server and extension_server.running),
+                "error": extension_server_error}
+
+    def enable(on):
+        app_settings.editable_settings[SettingsKeys.BROWSER_EXTENSION.value] = bool(on)
+        _extension_settings_changed()
+        start_extension_server()
+
+    def renew():
+        app_settings.editable_settings[SettingsKeys.BROWSER_EXTENSION_CODE.value] = new_code()
+        _extension_settings_changed()
+
+    def show_folder():
+        try:
+            folder = _extension_folder_for_chrome()
+        except Exception as error:
+            logger.exception(f"Could not copy the Chrome extension: {error}")
+            messagebox.showerror("Chrome extension", f"The extension folder could not be prepared.\n\n{error}")
+            return
+        import subprocess
+        try:
+            if sys.platform == "darwin":
+                subprocess.Popen(["open", folder])
+            elif sys.platform.startswith("win"):
+                os.startfile(folder)  # noqa: S606 - opens the folder in Explorer
+            else:
+                subprocess.Popen(["xdg-open", folder])
+        except Exception as error:
+            messagebox.showinfo("Chrome extension", f"The extension is in:\n{folder}\n\n({error})")
+
+    ExtensionWindow.show(root, state=state, on_enable=enable, on_new_code=renew, on_open_folder=show_folder)
+
+
 # Tracks the available microphones, the selected one and its live input level
 mic_test = MicrophoneTestFrame(parent=root, p=p, app_settings=app_settings, root=root)
 
@@ -2671,6 +2798,7 @@ workspace = Workspace(
         "open_chat": open_chat,
         "find_drug_flags": find_drug_flags,
         "open_eform_mapper": open_eform_mapper,
+        "open_browser_extension": open_browser_extension,
         "toggle_view": toggle_view,
         "open_settings": window.open_settings,
         "help_guide": window.open_help_guide,
@@ -2870,6 +2998,7 @@ def await_models(timeout_length=60):
 
 
 root.after(100, await_models)
+root.after(1500, start_extension_server)
 
 
 def _run_self_test(audio_path, report_path):

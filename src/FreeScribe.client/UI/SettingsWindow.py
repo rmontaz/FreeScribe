@@ -149,6 +149,10 @@ class SettingsWindow():
             SettingsKeys.MEDICAL_VOCABULARY.value: "",
             # Underline words in notes and transcripts that look like a misheard drug name
             SettingsKeys.DRUG_NAME_CHECK.value: True,
+            # The Chrome extension may control recording and fetch notes (127.0.0.1 only, paired by code)
+            SettingsKeys.BROWSER_EXTENSION.value: False,
+            SettingsKeys.BROWSER_EXTENSION_PORT.value: 52617,
+            SettingsKeys.BROWSER_EXTENSION_CODE.value: "",
         }
 
     def __init__(self):

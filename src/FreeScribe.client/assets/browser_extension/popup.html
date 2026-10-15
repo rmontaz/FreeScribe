@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>FreeScribe</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <img src="icons/icon32.png" alt="" width="22" height="22">
+    <span class="brand">FreeScribe</span>
+    <span id="pill" class="pill">…</span>
+    <button id="settings" class="icon-button" title="Pairing and shortcuts" aria-label="Settings">
+      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M19.4 13a7.6 7.6 0 0 0 0-2l2-1.6-2-3.4-2.4 1a7.4 7.4 0 0 0-1.7-1L15 3.5h-4l-.4 2.5a7.4 7.4 0 0 0-1.7 1l-2.4-1-2 3.4 2 1.6a7.6 7.6 0 0 0 0 2l-2 1.6 2 3.4 2.4-1a7.4 7.4 0 0 0 1.7 1l.4 2.5h4l.4-2.5a7.4 7.4 0 0 0 1.7-1l2.4 1 2-3.4zM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z"/></svg>
+    </button>
+  </header>
+
+  <!-- Shown until the extension is paired, or when FreeScribe cannot be reached -->
+  <section id="setup" hidden>
+    <p id="setup-text" class="muted"></p>
+    <label for="code">Pairing code</label>
+    <input id="code" type="text" placeholder="XXXX-XXXX-XXXX-XXXX" autocomplete="off" spellcheck="false">
+    <p class="hint">In FreeScribe, click <b>Chrome extension</b> in the sidebar, turn it on, and copy the code.</p>
+    <button id="pair" class="primary wide">Connect</button>
+    <p id="setup-error" class="error" hidden></p>
+  </section>
+
+  <section id="main" hidden>
+    <div class="session">
+      <div id="title" class="title"></div>
+      <div id="detail" class="muted small"></div>
+    </div>
+
+    <div class="controls">
+      <button id="record" class="primary wide big"></button>
+      <button id="pause" class="secondary" hidden></button>
+    </div>
+
+    <div id="note-card" class="card" hidden>
+      <div class="card-head">
+        <span>Note</span>
+        <span id="note-size" class="muted small"></span>
+      </div>
+      <pre id="note"></pre>
+      <div class="row">
+        <button id="insert" class="primary">Insert into EMR</button>
+        <button id="copy" class="secondary">Copy</button>
+      </div>
+      <p class="hint">Click in the EMR note box where the note should go, then press <b>Insert into EMR</b>.</p>
+    </div>
+
+    <p id="message" class="message" hidden></p>
+  </section>
+
+  <footer>
+    <span id="keys" class="muted small"></span>
+  </footer>
+  <script src="shared.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

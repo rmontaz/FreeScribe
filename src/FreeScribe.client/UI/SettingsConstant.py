@@ -38,6 +38,9 @@ class SettingsKeys(Enum):
     TRANSCRIBE_ONLY_MODE = "Transcribe Only Mode"
     MEDICAL_VOCABULARY = "Medical Vocabulary"
     DRUG_NAME_CHECK = "Check Drug Names"
+    BROWSER_EXTENSION = "Browser Extension"
+    BROWSER_EXTENSION_PORT = "Browser Extension Port"
+    BROWSER_EXTENSION_CODE = "Browser Extension Code"
 
 class Architectures(Enum):
     CPU = ("CPU", "cpu")

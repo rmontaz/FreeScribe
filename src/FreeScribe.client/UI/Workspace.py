@@ -382,7 +382,8 @@ class Workspace:
         tools = tk.Frame(side, bg=bg)
         tools.pack(fill="x", padx=Theme.px(8), pady=(Theme.px(8), 0))
         self.tools_frame = tools
-        if any(name in self.actions for name in ("open_chat", "fill_form", "open_eform_mapper")):
+        if any(name in self.actions for name in ("open_chat", "fill_form", "open_eform_mapper",
+                                                 "open_browser_extension")):
             tk.Label(tools, text="TOOLS", bg=bg, fg=Palette.TEXT_FAINT, font=Theme.font("micro", "semibold"),
                      anchor="w").pack(fill="x", padx=Theme.px(4), pady=(Theme.px(4), Theme.px(2)))
         if "open_chat" in self.actions:
@@ -400,6 +401,11 @@ class Workspace:
                                          command=lambda: self._act("open_eform_mapper"),
                                          tooltip="Map an OSCAR eForm from a PDF, in your web browser")
             self.mapper_button.pack(fill="x")
+        if "open_browser_extension" in self.actions:
+            self.extension_button = ToolRow(tools, "Chrome extension", "globe", "#5B3FB5", "#ECE7FA",
+                                            command=lambda: self._act("open_browser_extension"),
+                                            tooltip="Control FreeScribe and paste notes into your EMR from Chrome")
+            self.extension_button.pack(fill="x")
 
         # Footer is packed before the list so the list takes whatever height is left.
         footer = tk.Frame(side, bg=bg)
@@ -1022,6 +1028,21 @@ class Workspace:
         self._rebuild_session_list()
         self._act("sessions_cleared")
         self.toast("All sessions deleted", icon_name="trash")
+
+    def append_context(self, text):
+        """Adds ``text`` to the open session's Context (sent by the browser extension)."""
+        if self.current is None:
+            return
+        self.flush_edits()
+        existing = self.current.context.rstrip()
+        value = f"{existing}\n\n{text}" if existing else text
+        self.context.set_text(value)
+        self.context.flush_change()
+        if self.capture_side.winfo_manager():
+            self.capture_context.delete("1.0", "end")
+            self.capture_context.insert("1.0", value)
+            self.capture_context.edit_modified(False)
+        self.toast("Added to Context from the browser", icon_name="check")
 
     def flush_edits(self):
         """Make sure edits still waiting on the debounce timer reach the session."""
