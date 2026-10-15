@@ -17,6 +17,7 @@
 All files are on the [release page](https://github.com/rmontaz/FreeScribe/releases/tag/v1.2.1-RC3-workspace). The installers are not code-signed, so the first time you open one:
 
 - **Mac:** if macOS blocks it, open **System Settings → Privacy & Security** and click **Open Anyway**.
+- **Windows:** if SmartScreen says "Windows protected your PC", click **More info**, then **Run anyway**.
 
 ## What's new in this fork
 
