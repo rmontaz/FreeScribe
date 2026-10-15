@@ -1,8 +1,10 @@
 name: Installer test
 
 # Installs a released FreeScribe on clean test machines (Windows, Mac with Apple chip,
-# Intel Mac, Linux), checks that the AI model was put in place, starts the app, and
-# runs `--self-test`: the app transcribes a short spoken test visit and writes a note.
+# Intel Mac, Linux), checks that the AI model was put in place, starts the app and
+# waits until its log says both models loaded (no crash, no model errors), and then
+# (self_test) runs `--self-test`: the app transcribes a short spoken test visit and
+# writes a note.
 # Results (reports, logs, screenshots) are attached to the run, and the job summary
 # shows the transcript and note for each system.
 # Start it from the Actions tab or with:
@@ -22,6 +24,11 @@ on:
         description: "Windows build to install: CPU or NVIDIA"
         required: false
         default: "CPU"
+      self_test:
+        description: "Also run --self-test (transcribe a spoken test visit and write a note). Needs a release that has it (RC5 or later)."
+        type: boolean
+        required: false
+        default: true
 
 env:
   GH_TOKEN: ${{ github.token }}
@@ -105,7 +112,7 @@ jobs:
           if ($model) { "AI model: $($model.FullName) ($([int]($model.Length/1MB)) MB)" | Tee-Object -Append "$env:OUT\install-result.txt" }
           else { Write-Error "The installer did not put the AI model (.gguf) in place"; exit 1 }
 
-      - name: Start FreeScribe and watch it
+      - name: Start FreeScribe and wait for its models
         shell: pwsh
         run: |
           Add-Type -AssemblyName System.Windows.Forms, System.Drawing, UIAutomationClient, UIAutomationTypes
@@ -129,18 +136,42 @@ jobs:
             }
             $lines | Tee-Object -Append "$env:OUT\windows.txt"
           }
-          $p = Start-Process $env:APP_EXE -PassThru
-          for ($i = 1; $i -le 8; $i++) {
-            Start-Sleep -Seconds 15
-            if ($i % 2 -eq 0) { Snap ("start_{0:D3}s" -f ($i*15)); Windows "after $($i*15)s" }
-            if (-not (Get-Process -Id $p.Id -ErrorAction SilentlyContinue)) { "FreeScribe exited on its own" | Tee-Object "$env:OUT\run.txt"; break }
+          function FindLog {
+            foreach ($d in "$env:APPDATA", "$env:LOCALAPPDATA", "$env:ProgramData", (Split-Path $env:APP_EXE)) {
+              $f = Get-ChildItem $d -Recurse -Filter freescribe.log -ErrorAction SilentlyContinue | Select-Object -First 1
+              if ($f) { return $f.FullName }
+            }
+            return $null
           }
-          $crash = Select-String -Path "$env:OUT\windows.txt" -Pattern "Unhandled exception" -Quiet
+          # --file-debug writes the log to a file (the app has no console on Windows)
+          $p = Start-Process $env:APP_EXE -ArgumentList '--file-debug' -PassThru
+          $done = $false
+          for ($i = 1; $i -le 48 -and -not $done; $i++) {
+            Start-Sleep -Seconds 15
+            if ($i % 4 -eq 0) { Snap ("start_{0:D2}min" -f ($i/4)); Windows "after $($i*15)s" }
+            $log = FindLog
+            if ($log) {
+              $text = Get-Content $log -Raw -ErrorAction SilentlyContinue
+              if ($text -match 'Models loaded successfully on startup|Models failed to load|One or more models failed|Traceback') { $done = $true }
+            }
+            if (-not (Get-Process -Id $p.Id -ErrorAction SilentlyContinue)) { "FreeScribe exited on its own" | Tee-Object -Append "$env:OUT\run.txt"; $done = $true }
+          }
+          Start-Sleep -Seconds 10
+          Snap "start_final"; Windows "final"
+          $log = FindLog
+          if ($log) { Copy-Item $log "$env:OUT\startup.log"; "Log: $log" | Tee-Object -Append "$env:OUT\run.txt" }
+          if (Select-String -Path "$env:OUT\windows.txt" -Pattern "Unhandled exception" -Quiet -ErrorAction SilentlyContinue) {
+            "Unhandled exception dialog seen (see windows.txt)" | Add-Content "$env:OUT\startup.log"
+          }
           Get-Process | Where-Object { $_.ProcessName -match 'freescribe' } | Stop-Process -Force -ErrorAction SilentlyContinue
           Start-Sleep -Seconds 5
-          if ($crash) { Write-Error "FreeScribe showed an unhandled exception at startup (see windows.txt)"; exit 1 }
+
+      - name: Check the start
+        shell: pwsh
+        run: python scripts/check_startup_log.py "$env:OUT\startup.log" "Windows ${{ matrix.os }} (${{ inputs.windows_arch }})"
 
       - name: Self-test (transcribe the test visit and write a note)
+        if: inputs.self_test
         shell: pwsh
         run: |
           Add-Type -AssemblyName System.Windows.Forms, System.Drawing
@@ -160,8 +191,8 @@ jobs:
           $p.WaitForExit()
           "Self-test exit code: $($p.ExitCode)" | Tee-Object "$env:OUT\selftest-exit.txt"
 
-      - name: Check the result
-        if: always()
+      - name: Check the self-test
+        if: always() && inputs.self_test
         shell: pwsh
         run: python scripts/check_self_test.py "$env:OUT\report.json" "Windows ${{ matrix.os }} (${{ inputs.windows_arch }})"
 
@@ -224,7 +255,24 @@ jobs:
           ls -la /Users/Shared/FreeScribe/models 2>&1 | tee -a results/install-result.txt
           ls /Users/Shared/FreeScribe/models/*.gguf >/dev/null 2>&1 || { echo "The installer did not put the AI model in place"; exit 1; }
 
+      - name: Start FreeScribe and wait for its models
+        run: |
+          "$EXE" > results/startup.log 2>&1 &
+          PID=$!
+          for i in $(seq 1 48); do
+            sleep 15
+            [ $((i % 4)) -eq 0 ] && { screencapture -x "results/start_$((i / 4))min.png" 2>/dev/null || true; }
+            grep -a -q -E "Models loaded successfully on startup|Models failed to load|One or more models failed|Traceback" results/startup.log && break
+            kill -0 $PID 2>/dev/null || { echo "FreeScribe exited on its own" >> results/startup.log; break; }
+          done
+          sleep 10; screencapture -x results/start_final.png 2>/dev/null || true
+          kill $PID 2>/dev/null; sleep 3; kill -9 $PID 2>/dev/null || true
+
+      - name: Check the start
+        run: python3 scripts/check_startup_log.py results/startup.log "Mac ${{ matrix.name }}"
+
       - name: Self-test (transcribe the test visit and write a note)
+        if: inputs.self_test
         run: |
           "$EXE" --self-test "$PWD/audio/visit.wav" --self-test-report "$PWD/results/report.json" > results/app.log 2>&1 &
           PID=$!
@@ -238,8 +286,8 @@ jobs:
           echo "Self-test exit code: $CODE" | tee results/selftest-exit.txt
           grep -a -i -E "Traceback|No module named|Error" results/app.log | head -20 || true
 
-      - name: Check the result
-        if: always()
+      - name: Check the self-test
+        if: always() && inputs.self_test
         run: python3 scripts/check_self_test.py results/report.json "Mac ${{ matrix.name }}"
 
       - uses: actions/upload-artifact@v4
@@ -275,10 +323,31 @@ jobs:
             "https://huggingface.co/lmstudio-community/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-Q8_0.gguf?download=true"
           ls -la FreeScribe/models | tee -a results/install-result.txt
 
-      - name: Self-test (transcribe the test visit and write a note)
+      - name: Start a virtual screen
         run: |
-          Xvfb :99 -screen 0 1440x900x24 & sleep 2
-          export DISPLAY=:99
+          Xvfb :99 -screen 0 1440x900x24 > /dev/null 2>&1 &
+          echo "DISPLAY=:99" >> "$GITHUB_ENV"
+
+      - name: Start FreeScribe and wait for its models
+        run: |
+          sleep 2
+          ./FreeScribe/run-freescribe.sh < /dev/null > results/startup.log 2>&1 &
+          PID=$!
+          for i in $(seq 1 48); do
+            sleep 15
+            [ $((i % 4)) -eq 0 ] && import -window root "results/start_$((i / 4))min.png" 2>/dev/null
+            grep -a -q -E "Models loaded successfully on startup|Models failed to load|One or more models failed|Traceback" results/startup.log && break
+            kill -0 $PID 2>/dev/null || { echo "FreeScribe exited on its own" >> results/startup.log; break; }
+          done
+          sleep 10; import -window root results/start_final.png 2>/dev/null
+          pkill -f "FreeScribe/FreeScribe" || true; sleep 3; pkill -9 -f "FreeScribe/FreeScribe" || true
+
+      - name: Check the start
+        run: python3 scripts/check_startup_log.py results/startup.log "Linux (Ubuntu 22.04)"
+
+      - name: Self-test (transcribe the test visit and write a note)
+        if: inputs.self_test
+        run: |
           ( sleep 240; import -window root results/selftest_4min.png ) &
           set +e
           timeout 2700 ./FreeScribe/run-freescribe.sh --self-test "$PWD/audio/visit.wav" \
@@ -287,8 +356,8 @@ jobs:
           echo "Self-test exit code: $CODE" | tee results/selftest-exit.txt
           grep -a -i -E "Traceback|No module named|Error" results/app.log | head -20 || true
 
-      - name: Check the result
-        if: always()
+      - name: Check the self-test
+        if: always() && inputs.self_test
         run: python3 scripts/check_self_test.py results/report.json "Linux (Ubuntu 22.04)"
 
       - uses: actions/upload-artifact@v4
