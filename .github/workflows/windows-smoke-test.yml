@@ -1,0 +1,153 @@
+name: Windows smoke test
+
+# Installs a released Windows installer on a clean Windows machine, starts FreeScribe
+# and records what happens (screenshots, every window and dialog with its text,
+# crash reports, the app's files). A second job runs the test suite on Windows.
+# Start it from the Actions tab or with: gh workflow run windows-smoke-test.yml -f tag=<release tag>
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag whose FreeScribeInstaller_windows.exe to test"
+        required: true
+      arch:
+        description: "Build to install: CPU or NVIDIA"
+        required: false
+        default: "CPU"
+      minutes:
+        description: "How long to watch the app after starting it"
+        required: false
+        default: "4"
+
+jobs:
+  installer:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      OUT: ${{ github.workspace }}\smoke
+    steps:
+      - name: Download the installer
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force $env:OUT | Out-Null
+          gh release download "${{ inputs.tag }}" -R "${{ github.repository }}" -p FreeScribeInstaller_windows.exe -D .
+          Get-Item .\FreeScribeInstaller_windows.exe | Select-Object Name, Length | Format-Table | Out-String | Tee-Object "$env:OUT\installer.txt"
+
+      - name: Install silently
+        shell: pwsh
+        run: |
+          $p = Start-Process .\FreeScribeInstaller_windows.exe -ArgumentList '/S', '/ARCH=${{ inputs.arch }}' -PassThru -Wait
+          "Installer exit code: $($p.ExitCode)" | Tee-Object "$env:OUT\install-result.txt"
+          $dir = "${env:ProgramFiles(x86)}\FreeScribe"
+          if (-not (Test-Path $dir)) { $dir = "$env:ProgramFiles\FreeScribe" }
+          "Install folder: $dir" | Tee-Object -Append "$env:OUT\install-result.txt"
+          Get-ChildItem $dir -Recurse -Depth 1 | Select-Object FullName, Length | Format-Table -AutoSize | Out-String -Width 300 | Out-File "$env:OUT\install-files.txt"
+          $exe = Get-ChildItem $dir -Recurse -Filter "freescribe-client*.exe" | Select-Object -First 1
+          if (-not $exe) { Write-Error "No freescribe-client exe was installed"; exit 1 }
+          "APP_EXE=$($exe.FullName)" | Out-File -Append $env:GITHUB_ENV
+          "App: $($exe.FullName)" | Tee-Object -Append "$env:OUT\install-result.txt"
+
+      - name: Start FreeScribe and watch it
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing, UIAutomationClient, UIAutomationTypes
+          function Snap($name) {
+            $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+            $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+            $g = [System.Drawing.Graphics]::FromImage($bmp)
+            $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+            $bmp.Save("$env:OUT\$name.png"); $g.Dispose(); $bmp.Dispose()
+          }
+          function Windows($label) {
+            # Every top-level window of FreeScribe or an error reporter, with all the text in it
+            $root = [System.Windows.Automation.AutomationElement]::RootElement
+            $all = $root.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition)
+            $lines = @("---- $label $(Get-Date -Format HH:mm:ss)")
+            foreach ($w in $all) {
+              try { $proc = (Get-Process -Id $w.Current.ProcessId -ErrorAction Stop).ProcessName } catch { $proc = "?" }
+              if ($proc -notmatch 'freescribe|WerFault|python') { continue }
+              $lines += "WINDOW [$proc] '$($w.Current.Name)' class=$($w.Current.ClassName)"
+              $texts = $w.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
+              foreach ($t in $texts) { if ($t.Current.Name) { $lines += "    $($t.Current.ControlType.ProgrammaticName): $($t.Current.Name)" } }
+            }
+            $lines | Tee-Object -Append "$env:OUT\windows.txt"
+          }
+          $start = Get-Date
+          $p = Start-Process $env:APP_EXE -PassThru
+          "Started pid $($p.Id) at $start" | Tee-Object "$env:OUT\run.txt"
+          $minutes = [int]"${{ inputs.minutes }}"
+          for ($i = 1; $i -le ($minutes * 4); $i++) {
+            Start-Sleep -Seconds 15
+            $procs = Get-Process | Where-Object { $_.ProcessName -match 'freescribe|WerFault' } |
+                     Select-Object ProcessName, Id, @{n='MB';e={[int]($_.WorkingSet64/1MB)}}, MainWindowTitle
+            "---- after $($i*15)s" | Tee-Object -Append "$env:OUT\run.txt"
+            ($procs | Format-Table -AutoSize | Out-String -Width 300) | Tee-Object -Append "$env:OUT\run.txt"
+            if ($i % 2 -eq 0) { Snap ("screen_{0:D3}s" -f ($i*15)); Windows "after $($i*15)s" }
+            if (-not (Get-Process -Id $p.Id -ErrorAction SilentlyContinue)) {
+              "FreeScribe exited (code $($p.ExitCode)) after $($i*15)s" | Tee-Object -Append "$env:OUT\run.txt"
+              Snap "screen_after_exit"; Windows "after exit"; break
+            }
+          }
+          Snap "screen_final"; Windows "final"
+
+      - name: Collect crash reports and app files
+        if: always()
+        shell: pwsh
+        run: |
+          Get-WinEvent -FilterHashtable @{LogName='Application'; StartTime=(Get-Date).AddHours(-1)} -ErrorAction SilentlyContinue |
+            Where-Object { $_.ProviderName -match 'Application Error|Windows Error Reporting|\.NET Runtime|Python' -or $_.Message -match 'freescribe' } |
+            Format-List TimeCreated, ProviderName, Id, Message | Out-String -Width 400 | Out-File "$env:OUT\event-log.txt"
+          foreach ($d in "$env:APPDATA\FreeScribe", "$env:LOCALAPPDATA\FreeScribe", "$env:ProgramData\FreeScribe") {
+            if (Test-Path $d) {
+              Get-ChildItem $d -Recurse -Depth 2 | Select-Object FullName, Length, LastWriteTime | Format-Table -AutoSize |
+                Out-String -Width 400 | Out-File -Append "$env:OUT\app-data.txt"
+              Get-ChildItem $d -Recurse -Include *.log, *.txt, *.json -ErrorAction SilentlyContinue | Where-Object { $_.Length -lt 2MB } |
+                ForEach-Object { "==== $($_.FullName)"; Get-Content $_.FullName -Tail 200 } | Out-File -Append "$env:OUT\app-files.txt"
+            }
+          }
+          Get-ChildItem "$env:LOCALAPPDATA\CrashDumps", "$env:ProgramData\Microsoft\Windows\WER\ReportQueue" -Recurse -ErrorAction SilentlyContinue |
+            Select-Object FullName, Length | Format-Table -AutoSize | Out-String -Width 400 | Out-File "$env:OUT\crash-dumps.txt"
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-${{ matrix.os }}
+          path: smoke
+
+  tests:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install requirements
+        run: |
+          pip install --index-url https://abetlen.github.io/llama-cpp-python/whl/cpu --extra-index-url https://pypi.org/simple llama-cpp-python==v0.3.8
+          pip install -r client_requirements.txt
+          pip install pytest
+
+      - name: Run the tests
+        run: python -m pytest -q tests --ignore=tests/services/intent_actions --ignore=tests/services/test_whisper_hallucination_cleaner.py --ignore=tests/services/test_factual_consistency.py -p no:cacheprovider 2>&1 | Tee-Object pytest.txt
+        shell: pwsh
+        continue-on-error: true
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-tests
+          path: |
+            pytest.txt
