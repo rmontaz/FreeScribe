@@ -798,15 +798,45 @@ def check_silence_warning(silence_duration):
         window.destroy_warning_bar()
 
 
-silero, _silero = torch.hub.load(repo_or_dir='snakers4/silero-vad', model='silero_vad')
+def _load_silero():
+    """
+    The Silero voice-activity model. The first start downloads it from GitHub; after
+    that it comes from the local cache. Without it (no internet on the first start,
+    a firewall, GitHub refusing the request) FreeScribe still starts and detects
+    silence by loudness instead of crashing.
+    """
+    attempts = (
+        # skip_validation avoids a GitHub API call that is rate limited on shared networks
+        dict(repo_or_dir='snakers4/silero-vad', model='silero_vad', skip_validation=True, trust_repo=True),
+    )
+    cached = os.path.join(torch.hub.get_dir(), "snakers4_silero-vad_master")
+    if os.path.isdir(cached):
+        attempts = (dict(repo_or_dir=cached, model='silero_vad', source='local'),) + attempts
+    for options in attempts:
+        try:
+            model, _utils = torch.hub.load(**options)
+            return model
+        except Exception as error:  # noqa: BLE001 - any failure falls back to the loudness check
+            logger.warning(f"Silero voice detection could not be loaded ({type(error).__name__}: {error})")
+    logger.warning("Using a loudness check for silence instead of Silero voice detection.")
+    return None
+
+
+silero = _load_silero()
+
+# Loudness (RMS of float samples in -1..1) below which the fallback check calls a chunk silent
+FALLBACK_SILENCE_RMS = 0.01
 
 
 def is_silent(data, threshold: float = 0.65):
-    """Check if audio chunk contains speech using Silero VAD"""
+    """Check if audio chunk contains speech using Silero VAD (or loudness when it is unavailable)"""
     # Convert audio data to tensor and ensure correct format
     audio_tensor = torch.FloatTensor(data)
     if audio_tensor.dim() == 2:
         audio_tensor = audio_tensor.mean(dim=1)
+
+    if silero is None:
+        return float(audio_tensor.pow(2).mean().sqrt()) < FALLBACK_SILENCE_RMS
 
     # Get speech probability
     speech_prob = silero(audio_tensor, 16000).item()

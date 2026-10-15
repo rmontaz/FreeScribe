@@ -38,3 +38,15 @@ def test_relative_paths_on_macos_use_the_shared_folder(tmp_path, monkeypatch):
     assert os.path.normpath(path) == str(tmp_path / "models" / "custom.gguf") and downloadable is False
     path, downloadable = model_path.local_model_path("gemma2:2b-instruct-q8_0")
     assert os.path.normpath(path) == str(tmp_path / "models" / "gemma-2-2b-it-Q8_0.gguf") and downloadable is True
+
+
+def test_installed_app_finds_its_model_beside_itself(tmp_path, monkeypatch):
+    # Windows/Linux: the installer puts models/ next to the app; the folder it was started from must not matter
+    monkeypatch.setattr(model_path, "_in_shared_resources", lambda: False)
+    monkeypatch.setattr(model_path.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(model_path.sys, "executable", str(tmp_path / "freescribe-client.exe"))
+    monkeypatch.chdir(tmp_path.parent)
+    assert model_path.bundled_model_path() == str(tmp_path / "models" / "gemma-2-2b-it-Q8_0.gguf")
+    (tmp_path / "models").mkdir()
+    (tmp_path / "models" / "custom.gguf").write_bytes(b"x")
+    assert model_path.local_model_path("models/custom.gguf") == (str(tmp_path / "models" / "custom.gguf"), False)

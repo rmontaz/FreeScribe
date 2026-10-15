@@ -25,7 +25,27 @@ PROBLEMS = [
 ]
 
 
+# Test machines have no microphone; the app logs that with a traceback, which is expected
+EXPECTED_ON_TEST_MACHINES = re.compile(r"No Default Input Device Available|Failed to initialize microphone")
+
+
+def without_expected(text):
+    """The log without the tracebacks of expected problems (no microphone on a test machine)."""
+    kept, skip = [], 0
+    for line in text.splitlines():
+        if EXPECTED_ON_TEST_MACHINES.search(line):
+            skip = 4          # the traceback that follows
+            continue
+        if skip and ("Traceback" in line or line.startswith((" ", "OSError")) or "OSError" in line):
+            skip -= 1
+            continue
+        skip = 0
+        kept.append(line)
+    return "\n".join(kept)
+
+
 def check(text):
+    text = without_expected(text)
     findings, passed = [], True
     speech = SPEECH_LOADED in text
     both = LOADED in text

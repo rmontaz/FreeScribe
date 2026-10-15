@@ -12,6 +12,7 @@ This software is released under the AGPL-3.0 license.
 """
 
 import os
+import sys
 
 import utils.system
 from utils.file_utils import get_resource_path, is_flatpak
@@ -24,10 +25,25 @@ def _in_shared_resources() -> bool:
     return utils.system.is_macos() or is_flatpak()
 
 
+def _app_folder() -> str:
+    """
+    The folder the installed app runs from (installers put models/ next to it), or
+    the current folder when running from source. The installed app must not depend
+    on the folder it was started from: a shortcut, a file manager or a script can
+    each start it somewhere else.
+    """
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return "."
+
+
 def bundled_model_path() -> str:
     if _in_shared_resources():
         return get_resource_path(filename=f"models/{BUNDLED_MODEL}", shared=True)
-    return f"./models/{BUNDLED_MODEL}"
+    folder = _app_folder()
+    if folder == ".":
+        return f"./models/{BUNDLED_MODEL}"
+    return os.path.join(folder, "models", BUNDLED_MODEL)
 
 
 def local_model_path(setting: str):
@@ -43,4 +59,9 @@ def local_model_path(setting: str):
         path = get_resource_path(filename=path, shared=True)
     if path and os.path.isfile(path):
         return path, False
+    # A relative path in the setting is relative to the app's folder when installed
+    if path and not os.path.isabs(path) and _app_folder() != ".":
+        beside_app = os.path.join(_app_folder(), path)
+        if os.path.isfile(beside_app):
+            return beside_app, False
     return bundled_model_path(), True
