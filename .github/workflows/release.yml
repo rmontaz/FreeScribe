@@ -42,7 +42,7 @@ jobs:
 
       - name: Install requirements
         run: |
-          pip install -r client_requirements.txt
+          pip install -r client_requirements.txt -c constraints/windows.txt
 
       - name: Run PyInstaller for NVIDIA
         run: |
@@ -105,7 +105,7 @@ jobs:
 
       - name: Install requirements
         run: |
-          pip install -r client_requirements_mac_x86.txt
+          pip install -r client_requirements_mac_x86.txt -c constraints/macos-x86_64.txt
       
       - name: Install ffmpeg
         run: |
@@ -146,7 +146,7 @@ jobs:
 
       - name: Install requirements
         run: |
-          pip install -r client_requirements_mac.txt
+          pip install -r client_requirements_mac.txt -c constraints/macos-arm64.txt
 
       - name: Install ffmpeg
         run: |
@@ -195,7 +195,7 @@ jobs:
 
       - name: Install requirements
         run: |
-          pip install -r client_requirements.txt
+          pip install -r client_requirements.txt -c constraints/linux.txt
 
       - name: Run PyInstaller
         run: |

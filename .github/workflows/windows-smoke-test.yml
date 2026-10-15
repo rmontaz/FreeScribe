@@ -136,7 +136,7 @@ jobs:
       - name: Install requirements
         run: |
           pip install --index-url https://abetlen.github.io/llama-cpp-python/whl/cpu --extra-index-url https://pypi.org/simple llama-cpp-python==v0.3.8
-          pip install -r client_requirements.txt
+          pip install -r client_requirements.txt -c constraints/windows.txt
           pip install pytest
 
       - name: Run the tests
