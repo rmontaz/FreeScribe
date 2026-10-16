@@ -86,6 +86,10 @@ function render(status) {
   }
   if (!status.writes_note) parts.push("Transcribe-only mode");
   $("detail").textContent = parts.join(" · ");
+  const patient = session && session.patient;
+  $("patient").textContent = patient ? `Patient: ${patient}` : "";
+  $("link").textContent = patient ? "Update from chart" : "Link patient from chart";
+  $("link").hidden = !session;
 
   const record = $("record");
   if (status.recording) {
@@ -121,8 +125,32 @@ async function loadNote() {
   }
 }
 
+async function linkPatient(quiet) {
+  try {
+    const name = await fsLinkPatient();
+    if (name) {
+      if (!quiet) message(`Linked ${name} from the chart. Forms will use the chart’s details.`, "ok");
+      return name;
+    }
+    if (!quiet) message("No OSCAR patient chart was found in this tab. Open the patient’s chart and try again.", "warn");
+  } catch (error) {
+    message(error.message, "warn");
+  }
+  return null;
+}
+
 async function act(action) {
   message("");
+  // Starting from a patient's chart links that patient to the session; a session that
+  // belongs to another patient is not recorded into
+  if (action === "start" && current && current.session) {
+    try {
+      await fsLinkPatient();
+    } catch (error) {
+      message(error.message, "warn");
+      if (error.kind === "refused") return;
+    }
+  }
   try {
     await fsRecord(action);
     if (action === "stop") {
@@ -135,6 +163,11 @@ async function act(action) {
   setTimeout(refresh, 400);
 }
 
+$("link").addEventListener("click", async () => {
+  message("");
+  await linkPatient(false);
+  setTimeout(refresh, 300);
+});
 $("record").addEventListener("click", () => act(current && current.recording ? "stop" : "start"));
 $("pause").addEventListener("click", () => act(current && current.paused ? "resume" : "pause"));
 

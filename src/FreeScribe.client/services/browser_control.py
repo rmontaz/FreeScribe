@@ -20,8 +20,9 @@ from __future__ import annotations
 import re
 
 from services.note_text import plain_note
-from dataclasses import dataclass
-from typing import Callable, Optional
+from services import patient_details
+from dataclasses import dataclass, field
+from typing import Callable, Dict, Optional
 
 MAX_CONTEXT = 20000
 
@@ -42,6 +43,7 @@ class AppState:
     context: str = ""
     writes_note: bool = True        # False in Transcribe Only mode / "No Note Generation"
     speech_ready: bool = True
+    patient: Dict[str, str] = field(default_factory=dict)   # the patient linked to the session (from the EMR)
 
 
 def note_for_emr(note: str) -> str:
@@ -54,15 +56,17 @@ class VisitControl:
     :param state: returns the app's current :class:`AppState`
     :param start, stop, pause, resume: carry out the action in the app
     :param add_context: adds text to the open session's Context
+    :param set_patient: links the patient's details (from the EMR chart) to the open session
     :param version: the app version, reported in status
     """
 
     def __init__(self, state: Callable[[], AppState], start: Callable[[], None], stop: Callable[[], None],
                  pause: Callable[[], None], resume: Callable[[], None], add_context: Callable[[str], None],
-                 version: str = ""):
+                 version: str = "", set_patient: Optional[Callable[[Dict[str, str]], None]] = None):
         self.state = state
         self._start, self._stop, self._pause, self._resume = start, stop, pause, resume
         self._add_context = add_context
+        self._set_patient = set_patient
         self.version = version
 
     # ------------------------------------------------------------------ status
@@ -89,6 +93,7 @@ class VisitControl:
                 "title": s.title,
                 "has_transcript": bool(s.transcript.strip()),
                 "has_note": bool(s.note.strip()),
+                "patient": patient_details.display_name(s.patient) if s.patient else "",
             } if s.session_id else None,
         }
 
@@ -136,6 +141,32 @@ class VisitControl:
             raise ControlError("Start or open a session in FreeScribe first.")
         self._add_context(text)
         return {"ok": True, "added": len(text)}
+
+
+    def patient(self, payload: dict) -> dict:
+        """Links the patient open in the EMR to the open session (name, date of birth, health card…)."""
+        details = patient_details.clean((payload or {}).get("patient") or {})
+        if not (details.get("last_name") or details.get("first_name")):
+            raise ControlError("No patient details were found in this chart.")
+        if self._set_patient is None:
+            raise ControlError("This version of FreeScribe cannot take patient details.")
+        s = self.state()
+        if not s.session_id and not s.recording:
+            raise ControlError("Start or open a session in FreeScribe first.")
+        if s.patient and not same_patient(s.patient, details):
+            raise ControlError(f"This FreeScribe session is for {patient_details.display_name(s.patient)}. "
+                               "Start a new session for this patient first.")
+        self._set_patient(details)
+        return {"ok": True, "patient": patient_details.display_name(details)}
+
+
+def same_patient(a: Dict[str, str], b: Dict[str, str]) -> bool:
+    """Same person: the health card number matches, or else the name and date of birth do."""
+    if a.get("hin") and b.get("hin"):
+        return re.sub(r"\D", "", a["hin"]) == re.sub(r"\D", "", b["hin"])
+    def name(d):
+        return (d.get("last_name", "").lower(), d.get("first_name", "").lower())
+    return name(a) == name(b) and (not a.get("dob") or not b.get("dob") or a["dob"] == b["dob"])
 
 
 def describe_phase(status: Optional[dict]) -> str:

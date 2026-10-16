@@ -79,3 +79,10 @@ input[type=text]:focus { outline: 2px solid var(--primary-soft); border-color: v
 .message.warn { background: var(--warning-soft); color: var(--warning); }
 .error { color: var(--danger); font-size: 12px; margin: 8px 0 0; }
 footer { padding: 8px 12px; border-top: 1px solid var(--border); background: var(--surface); }
+.patient-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; min-height: 22px; }
+#patient:empty { display: none; }
+.link-button {
+  margin-left: auto; padding: 3px 8px; font-size: 12px; font-weight: 600; border-radius: 6px;
+  background: transparent; color: var(--primary); border: 1px solid var(--border);
+}
+.link-button:hover { background: var(--primary-soft); }

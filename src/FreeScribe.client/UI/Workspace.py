@@ -1044,6 +1044,21 @@ class Workspace:
             self.capture_context.edit_modified(False)
         self.toast("Added to Context from the browser", icon_name="check")
 
+    def set_patient(self, details):
+        """Links the patient open in the EMR (sent by the browser extension) to the open session."""
+        session = self.current
+        if session is None:
+            return
+        from services import patient_details
+        was_empty = session.is_empty
+        session.patient = dict(details)
+        name = patient_details.display_name(details)
+        if not session.title.strip() and name:
+            session.title = name
+            self.title_entry.set_value(name)
+        self._touch(session, was_empty)
+        self.toast(f"Patient from the chart: {name}", icon_name="check")
+
     def flush_edits(self):
         """Make sure edits still waiting on the debounce timer reach the session."""
         for page in list(self._pages.values()):

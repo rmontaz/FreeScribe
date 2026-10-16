@@ -60,7 +60,18 @@ chrome.commands.onCommand.addListener(async (command) => {
         await fsRecord("stop");
         notify("FreeScribe", status.writes_note ? "Stopped. Writing the note…" : "Stopped.");
       } else {
+        // Starting from a patient's chart links that patient to the session
+        let name = null;
+        try {
+          name = await fsLinkPatient();
+        } catch (error) {
+          if (error.kind === "refused") {
+            notify("FreeScribe", error.message);
+            return;
+          }
+        }
         await fsRecord("start");
+        if (name) notify("FreeScribe", `Recording. Patient: ${name}`);
       }
     } else if (command === "pause-resume") {
       const status = await fsStatus();

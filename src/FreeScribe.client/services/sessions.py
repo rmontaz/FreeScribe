@@ -26,7 +26,7 @@ import os
 import tempfile
 import uuid
 from dataclasses import dataclass, field
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 LEGACY_TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
 UNTITLED = "Untitled session"
@@ -103,6 +103,9 @@ class Session:
     # Chat with the AI about this encounter: {"role": "user" | "assistant" | "event", "text", "time"}.
     # "event" entries record things done in the session (a form filled) for the chat to know about.
     chat: List[dict] = field(default_factory=list)
+    # The patient's details as the EMR has them (see services.patient_details), e.g. from
+    # the OSCAR chart through the Chrome extension; used to fill demographic boxes on forms
+    patient: Dict[str, str] = field(default_factory=dict)
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     created: str = field(default_factory=lambda: _now().isoformat())
     updated: str = field(default_factory=lambda: _now().isoformat())
@@ -120,7 +123,7 @@ class Session:
     def is_empty(self) -> bool:
         """True when nothing worth keeping has been entered yet."""
         return not (self.title.strip() or self.transcript.strip() or self.context.strip()
-                    or self.note.strip() or self.documents or self.chat)
+                    or self.note.strip() or self.documents or self.chat or self.patient)
 
     @property
     def has_output(self) -> bool:
@@ -185,6 +188,7 @@ class Session:
             "duration": round(float(self.duration or 0), 1),
             "documents": [document.to_dict() for document in self.documents],
             "chat": [dict(message) for message in self.chat],
+            "patient": dict(self.patient),
         }
 
     def add_chat(self, role: str, text: str) -> dict:
@@ -229,6 +233,9 @@ class Session:
             duration=duration,
             documents=documents,
             chat=chat,
+            patient={str(k): str(v) for k, v in (data.get("patient") or {}).items()
+                     if isinstance(v, (str, int, float)) and str(v).strip()}
+            if isinstance(data.get("patient"), dict) else {},
             id=str(data.get("id") or uuid.uuid4().hex[:12]),
             created=created_text,
             updated=str(data.get("updated") or created_text),

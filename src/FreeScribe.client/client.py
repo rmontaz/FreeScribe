@@ -67,6 +67,7 @@ from services.whisper_hallucination_cleaner import hallucination_cleaner
 from utils.whisper.WhisperModel import load_stt_model, faster_whisper_transcribe, is_whisper_valid, is_whisper_lock, load_model_with_loading_screen, unload_stt_model, get_model_from_settings, WhisperModelStatus, get_whisper_model, set_whisper_model
 from services.factual_consistency import find_factual_inconsistency
 from services.note_text import plain_note
+from services import patient_details
 import utils.arg_parser
 from services.whisper_hallucination_cleaner import hallucination_cleaner, load_hallucination_cleaner_model
 from utils.log_config import logger
@@ -2052,10 +2053,13 @@ def fill_form():
 
     source = form_filler.compose_source(
         title=session.title, note=session.note, context=session.context, transcript=session.transcript,
-        visit_date=session.created_at.date(), max_chars=form_source_budget())
+        visit_date=session.created_at.date(), max_chars=form_source_budget(),
+        patient=patient_details.summary(session.patient) if session.patient else "")
     # Identifiers become placeholders the model copies; the real values are put back afterwards
     hidden_source, mapping = form_filler.pseudonymize(source)
-    asked = [f for f in fields if f.needs_answer]
+    # The patient's boxes (name, date of birth, address…) come from the chart, not the AI
+    from_chart = patient_details.patient_values(fields, session.patient)
+    asked = [f for f in fields if f.needs_answer and f.name not in from_chart]
     form_title = os.path.splitext(os.path.basename(pdf_path))[0]
     session_title = session.title
     session_id = session.id
@@ -2075,12 +2079,51 @@ def fill_form():
         start(hidden_source)
 
 
-def _ask_form_values(asked, source, mapping, form_title, cancel_event=None, progress=None):
-    """Asks the model for ``asked`` fields from ``source``; returns ({field name: value}, problems)."""
+_visit_facts_cache = {}   # hash of the visit information -> fact sheet (the last few visits)
+
+
+def _visit_facts(source, cancel_event=None, progress=None):
+    """
+    The visit's facts, topic by topic (form_filler.FACT_TOPICS), as the fact sheet
+    the form is filled from. Done once per visit: a second form reuses it.
+    Returns ``source`` itself when no facts could be read.
+    """
+    import hashlib
+    key = hashlib.sha256(source.encode("utf-8")).hexdigest()
+    if key in _visit_facts_cache:
+        return _visit_facts_cache[key]
+
+    def ask(prompt):
+        try:
+            reply = send_text_to_chatgpt(prompt, cancel_event)
+        except Exception as e:
+            logger.exception(f"Reading the visit facts failed: {e}")
+            return ""
+        if reply and is_llm_error(reply):
+            logger.warning(f"Reading the visit facts failed: {describe_llm_error(reply)}")
+            return ""
+        return reply
+
+    sheet = form_filler.read_visit_facts(
+        source, ask, progress, cancelled=lambda: cancel_event is not None and cancel_event.is_set())
+    if sheet == source:
+        return source
+    if len(_visit_facts_cache) >= 8:
+        _visit_facts_cache.pop(next(iter(_visit_facts_cache)))
+    _visit_facts_cache[key] = sheet
+    return sheet
+
+
+def _ask_form_values(asked, source, mapping, form_title, cancel_event=None, progress=None, read_facts=None):
+    """
+    Asks the model for ``asked`` fields from ``source``; returns ({field name: value}, problems).
+    ``read_facts(text)`` reports progress while the visit's facts are read first.
+    """
     values, problems = {}, []
     done = 0
     local = bool(app_settings.editable_settings.get(SettingsKeys.LOCAL_LLM.value, False))
     per_prompt = form_filler.FIELDS_PER_PROMPT_LOCAL if local else form_filler.FIELDS_PER_PROMPT
+    source = _visit_facts(source, cancel_event, read_facts)
     for group in form_filler.plan_batches(asked, per_prompt):
         if cancel_event is not None and cancel_event.is_set():
             break
@@ -2133,7 +2176,8 @@ def _fill_form_thread(prepared, asked, source, mapping, form_title, session_titl
         found, issues = _ask_form_values(
             asked, source, mapping, form_title, cancel_event,
             progress=lambda done, size, total: loading_window.set_text(
-                f"Filling fields {done + 1}–{done + size} of {total}…"))
+                f"Filling fields {done + 1}–{done + size} of {total}…"),
+            read_facts=loading_window.set_text)
         values.update(found)
         problems.extend(issues)
 
@@ -2177,11 +2221,17 @@ def _show_form_review(prepared, values, session_title, session_id=None, from_ses
         if storing_notes_locally():
             save_notes_history()
 
-    # The clinician's own boxes come from their saved details, never from the AI
+    # The clinician's own boxes come from their saved details, the patient's from the chart;
+    # never from the AI
     values = dict(values)
+    session = session_store.get(session_id) if session_id else None
     for name, value in form_filler.clinician_values(prepared.fields, clinician_profile()).items():
         if not values.get(name):
             values[name] = value
+    if session is not None and session.patient:
+        for name, value in patient_details.patient_values(prepared.fields, session.patient).items():
+            if not values.get(name):
+                values[name] = value
 
     review["window"] = FormFillWindow(root, prepared.original_path, prepared.fields, values,
                                       session_title=session_title, on_saved=on_saved,
@@ -2281,9 +2331,11 @@ class FormTalk:
             title=session.title if session else "", note=session.note if session else "",
             context=session.context if session else "", transcript=session.transcript if session else "",
             visit_date=session.created_at.date() if session else None, max_chars=form_source_budget(),
-            dictation=text)
+            dictation=text, patient=patient_details.summary(session.patient) if session and session.patient else "")
         hidden, mapping = form_filler.pseudonymize(source)
-        asked = [f for f in self.prepared.fields if f.needs_answer]
+        from_chart = patient_details.patient_values(self.prepared.fields, session.patient) \
+            if session and session.patient else {}
+        asked = [f for f in self.prepared.fields if f.needs_answer and f.name not in from_chart]
         if not asked:
             on_values({})
             return
@@ -2294,6 +2346,7 @@ class FormTalk:
                 if problems and not any(values.values()):
                     run_on_ui(on_error, f"The form could not be filled. {problems[0]}")
                 else:
+                    values.update({k: v for k, v in from_chart.items() if not values.get(k)})
                     run_on_ui(on_values, values)
             threading.Thread(target=work, daemon=True).start()
 
@@ -2693,7 +2746,8 @@ def _extension_state():
         recording=bool(is_recording), paused=bool(is_paused), busy=workspace.busy_text or "",
         session_id=session.id if session else "", title=session.display_title if session else "",
         transcript=session.transcript if session else "", note=session.note if session else "",
-        context=session.context if session else "", writes_note=not is_transcribe_only())
+        context=session.context if session else "", writes_note=not is_transcribe_only(),
+        patient=dict(session.patient) if session else {})
 
 
 def _extension_code():
@@ -2732,11 +2786,13 @@ def start_extension_server():
             pause=toggle_pause,
             resume=toggle_pause,
             add_context=lambda text: run_on_ui(workspace.append_context, text),
+            set_patient=lambda details: run_on_ui(workspace.set_patient, details),
             version=get_application_version())
         extension_server = ExtensionServer(
             port, code=_extension_code,
             get_routes={"/api/status": control.status, "/api/note": control.note},
-            post_routes={"/api/record": control.record, "/api/context": control.context},
+            post_routes={"/api/record": control.record, "/api/context": control.context,
+                         "/api/patient": control.patient},
             user_errors=(ControlError,))
     try:
         extension_server.start()

@@ -104,6 +104,8 @@ class FormField:
     box: Tuple[float, float] = (0.0, 0.0)  # width and height of the field on the page, in points
     role: str = ""            # CLINICIAN (filled from the clinician's saved details), PRIVATE (left
                               # for a person: IDs, signatures, contact details) or "" (asked of the AI)
+    third_party: bool = False # about someone other than the patient or clinician (a witness)
+    section: str = ""         # the heading the field sits under ("Section 5 - Medical conditions")
 
     def describe(self) -> str:
         """How the field is described to the model."""
@@ -280,6 +282,7 @@ def read_form(path: str) -> List[FormField]:
         raise FormError("This PDF's form fields are all read-only or signatures, so there is nothing to fill.")
 
     _fix_grid_options(fields, widgets)
+    _assign_sections(fields, lines_for)
 
     fields.sort(key=lambda f: (f.page, round(f.top / 6), _left_of(widgets, f.name)))
     _number_repeats(fields)
@@ -288,6 +291,39 @@ def read_form(path: str) -> List[FormField]:
 
 
 _ROW_NUMBER = re.compile(r"\s*\((\d{1,2})\)\s*$")
+
+# Section headings as forms print them: "Section 5 - Medical conditions", "Section B: …",
+# "8. Treatment Details - Psychological", "Part 2 …"
+_HEADING = re.compile(
+    r"^(?:section|part)\s+(?:\d{1,2}[a-z]?|[a-h])\b\s*[-–—:.]?\s*\S"
+    r"|^\d{1,2}\.\s+[A-Z][A-Za-z]", re.IGNORECASE)
+
+
+def _assign_sections(fields, lines_for):
+    """Give each field the last section heading printed above it (on its page or an earlier one)."""
+    headings: Dict[int, List[Tuple[float, str]]] = {}
+    for page in sorted({f.page for f in fields}):
+        found = []
+        for line in lines_for(page) or []:
+            text = _tidy(" ".join(t for _x, t, _s in line["fragments"]))
+            if not (3 < len(text) <= 160 and _HEADING.match(text)):
+                continue
+            # "6. Medications (please attach a separate list…)" -> "6. Medications"
+            text = re.sub(r"\s*\((?:e\.g\.|please\b|if\b|see\b).*$", "", text, flags=re.IGNORECASE).strip()
+            # A numbered question ("3. If yes, please indicate…") is not a heading
+            if re.search(r"\b(?:if yes|if no|please|do you|did you|will you|have you|has the)\b|\?$", text,
+                         re.IGNORECASE):
+                continue
+            found.append((line["y"], text[:80]))
+        headings[page] = found
+    for f in fields:
+        y_top = -f.top          # PDF y grows upwards; a heading above the field has a larger y
+        current = ""
+        for page in sorted(p for p in headings if p <= f.page):
+            above = [(y, t) for y, t in headings[page] if page < f.page or y >= y_top - 2]
+            if above:
+                current = min(above)[1]     # the lowest of them: the nearest above the field
+        f.section = current[:80]
 
 
 def _number_repeats(fields):
@@ -382,12 +418,14 @@ def assign_roles(fields: Sequence["FormField"]) -> None:
             block -= 1
         elif witness and person_detail:
             f.role = PRIVATE            # the witness's other names, phone and date
+            f.third_party = True
             witness -= 1
         else:
             block = witness = 0
             if _PRIVATE_LABEL.search(label) or _CONTACT_LABEL.search(label):
                 f.role = PRIVATE
                 if re.search(r"witness", label, re.IGNORECASE):
+                    f.third_party = True
                     witness = 6
             elif re.search(r"certified specialty|degree/specialty", label, re.IGNORECASE):
                 f.role = CLINICIAN
@@ -866,7 +904,8 @@ def restore(value: str, mapping: Dict[str, str]) -> str:
 
 # ================================================================== prompting
 def compose_source(title: str = "", note: str = "", context: str = "", transcript: str = "",
-                   visit_date: Optional[_dt.date] = None, max_chars: int = 12000, dictation: str = "") -> str:
+                   visit_date: Optional[_dt.date] = None, max_chars: int = 12000, dictation: str = "",
+                   patient: str = "") -> str:
     """
     The visit information the form is filled from, shortened to ``max_chars``.
 
@@ -878,6 +917,8 @@ def compose_source(title: str = "", note: str = "", context: str = "", transcrip
     head = [f"Date of visit: {visit_date.isoformat()}"]
     if title.strip():
         head.append(f"Session title (often the patient's name): {title.strip()}")
+    if patient.strip():
+        head.append(f"Patient (from the chart): {patient.strip()}")
     parts = ["\n".join(head)]
     if dictation.strip():
         parts.append(f"{DICTATION_HEADING}\n{dictation.strip()}")
@@ -942,6 +983,122 @@ def earlier_answers(group: Sequence[FormField], fields: Sequence[FormField],
     return found[-limit:]
 
 
+# ============================================================== visit facts
+# Before a form is filled the model reads the visit once per topic and lists the
+# facts; the fields are then filled from that short list instead of the whole
+# conversation. A small model finds "the medications in this visit" far more
+# reliably than it fills six unrelated boxes from a long transcript, and there are
+# no conversation sentences left to copy into the form.
+FACT_TOPICS: Tuple[Tuple[str, str], ...] = (
+    ("Diagnoses",
+     "the diagnoses (main and secondary), diagnosis codes (ICD), when the symptoms started, what caused the "
+     "condition (an injury at work, a car accident, an illness), and earlier episodes of the same problem "
+     "with when and by whom they were treated"),
+    ("Symptoms and examination",
+     "the current symptoms with how often and how severe they are, what the clinician found on examination, "
+     "test or questionnaire scores, and any rating the clinician gave for a specific area (no impact, mild, "
+     "moderate, severe)"),
+    ("Functional limitations and restrictions",
+     "what the patient cannot do or must not do (lifting, bending, sitting, standing, walking, stairs, "
+     "concentrating, driving…), with the limits and the dates or periods they apply to"),
+    ("Work",
+     "the patient's job and employer, the last day worked, the first day off work, whether the clinician "
+     "advised the patient to stop working and from when, the return-to-work plan (gradual, modified duties, "
+     "hours) with the expected dates, or that a return to work was not discussed or is not expected"),
+    ("Medications",
+     "each medication with its name, dose, how often, the date it was started, dose changes with their dates, "
+     "and the response or side effects; one medication per line"),
+    ("Treatment, referrals and hospital",
+     "treatments other than medication (therapy, counselling, physiotherapy, rehabilitation, oxygen…) with the "
+     "provider's name and place, how often, the start date, the last visit and the response; referrals and "
+     "specialist appointments with the name, specialty and date; emergency visits, hospital stays and surgery "
+     "with the place and dates; one item per line"),
+    ("Investigations",
+     "tests and investigations done with their dates and results, tests or reports still pending, and reports "
+     "being sent with the form"),
+    ("Response, prognosis and plan",
+     "the overall response to treatment, whether the patient follows the treatment plan, planned changes to "
+     "treatment, the prognosis, how long the condition is expected to last and whether it is continuous or "
+     "comes and goes"),
+    ("Other details",
+     "how long the patient has been in the clinician's care, the number of visits, the first visit for this "
+     "problem, the last and next visit dates, height and weight, factors that complicate recovery (work, "
+     "family, money or legal problems, alcohol or drugs, coping), the patient's supports, driving or "
+     "professional licences, and anything else the clinician stated that a form might ask about"),
+)
+NONE_STATED = "None stated."
+
+
+def build_fact_prompt(topic: str, what: str, source: str) -> str:
+    """Asks the model to list the facts on one topic from the visit information."""
+    return (
+        f"Read the visit information below and list only {what}.\n\n"
+        "Rules:\n"
+        "- Only facts stated in the visit information. Never guess or add anything.\n"
+        "- One fact per line, each starting with \"- \". Short clinical wording: no sentences from the "
+        "conversation and no \"you\" or \"I\".\n"
+        "- Write dates as YYYY-MM-DD, or YYYY-MM when only the month is known.\n"
+        "- Keep names, doses, numbers and codes exactly as stated. Placeholders like {{PHONE-1}} stand "
+        "for real details: copy them as they are.\n"
+        "- What the clinician said for this form, when given, comes first.\n"
+        f"- If the visit information says nothing about this, reply with exactly: {NONE_STATED}\n\n"
+        f"Visit information:\n<<<\n{source}\n>>>\n\n"
+        f"{topic}:"
+    )
+
+
+def parse_facts(reply: str, limit: int = 1500) -> str:
+    """The model's list as clean "- " lines ("" when it found nothing)."""
+    text = re.sub(r"^```\w*|```$", "", (reply or "").strip(), flags=re.MULTILINE)
+    lines = []
+    for line in text.splitlines():
+        line = re.sub(r"\*\*(.+?)\*\*", r"\1", line).strip()
+        line = re.sub(r"^\s*(?:[-*•]|\d{1,2}[.)])\s*", "", line).strip()
+        if not line or line.endswith(":") and len(line) < 40:
+            continue
+        if re.fullmatch(r"(?:none|nothing|no information)(?: stated| mentioned| given)?\.?", line, re.IGNORECASE):
+            continue
+        if line not in lines:
+            lines.append(line)
+    out = "\n".join(f"- {line}" for line in lines)
+    return out[:limit].rsplit("\n", 1)[0] if len(out) > limit else out
+
+
+def read_visit_facts(source: str, ask, progress=None, cancelled=None) -> str:
+    """
+    Reads the visit's facts topic by topic and returns the fact sheet the form is
+    filled from, or ``source`` itself when no facts could be read (the model
+    failed or the visit says nothing).
+
+    :param ask: ``ask(prompt) -> reply`` ("" on failure)
+    :param progress: called with a short text before each topic
+    :param cancelled: returns True to stop early (``source`` is returned)
+    """
+    facts = []
+    for number, (topic, what) in enumerate(FACT_TOPICS, 1):
+        if cancelled is not None and cancelled():
+            return source
+        if progress is not None:
+            progress(f"Reading the visit: {topic.lower()} ({number} of {len(FACT_TOPICS)})…")
+        facts.append((topic, parse_facts(ask(build_fact_prompt(topic, what, source)) or "")))
+    if not any(text for _topic, text in facts):
+        return source
+    return fact_sheet(source, facts)
+
+
+def fact_sheet(source: str, facts: Sequence[Tuple[str, str]]) -> str:
+    """
+    The visit information the fields are filled from: the opening lines of
+    ``source`` (visit date, patient), then each topic's facts. Topics with no
+    facts are listed as such, so the model knows to leave those fields empty.
+    """
+    head = source.split("\n\n", 1)[0].strip()
+    parts = [head] if head else []
+    for topic, text in facts:
+        parts.append(f"{topic}:\n{text.strip() or NONE_STATED}")
+    return "\n\n".join(parts)
+
+
 PROMPT_RULES = (
     "How to answer:\n"
     "1. Use only facts stated in the visit information. If it does not give the answer, use \"\". "
@@ -958,14 +1115,15 @@ PROMPT_RULES = (
     "an earlier row.\n"
     "7. When a field asks for two things (for example a dose and a date), give both.\n"
     "8. Placeholders like {{PHONE-1}} stand for real details. Copy them exactly where they belong.\n"
-    "9. What the clinician said for this form, when given, comes first."
+    "9. What the clinician said for this form, when given, comes first.\n"
+    "10. The part of the form a field is in is shown in [brackets]; use it to understand what the field asks."
 )
 
 
 def build_prompt(group: Sequence[FormField], source: str, form_title: str = "",
                  earlier: Sequence[Tuple[str, str]] = ()) -> str:
     """The prompt that asks the model for the fields in ``group``."""
-    lines = [f"{i}. {f.describe()}" for i, f in enumerate(group, 1)]
+    lines = [f"{i}. {f'[{f.section}] ' if f.section else ''}{f.describe()}" for i, f in enumerate(group, 1)]
     example = ", ".join(f'"{i}": ""' for i in range(1, min(len(group), 3) + 1))
     done = ""
     if earlier:

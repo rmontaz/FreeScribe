@@ -135,3 +135,114 @@ async function fsInsertIntoActiveTab(text) {
     ? { done: true, name: inserted.result.name }
     : { done: false, reason: "nofield" };
 }
+
+/* ------------------------------------------------------ patient from OSCAR */
+// Runs inside the OSCAR page (each frame). Finds the chart's patient number and reads the
+// patient's details with the clinician's own OSCAR session: OSCAR's JSON service
+// (/ws/rs/demographics/{id}) when it has one, otherwise the patient's edit page.
+// Self-contained: Chrome copies this function into the page.
+async function fsReadOscarPatient() {
+  const pad = (v) => String(v || "").padStart(2, "0");
+  const fromDoc = (doc) => {
+    const val = (name) => {
+      const el = doc.querySelector(`[name="${name}"]`);
+      if (!el) return "";
+      if (el.tagName === "SELECT") return el.value || (el.selectedOptions[0] && el.selectedOptions[0].value) || "";
+      return el.value || el.getAttribute("value") || "";
+    };
+    const last = val("last_name"), first = val("first_name");
+    if (!last && !first) return null;
+    const y = val("year_of_birth"), m = val("month_of_birth"), d = val("date_of_birth");
+    return {
+      first_name: first, last_name: last,
+      dob: y && m && d ? `${y}-${pad(m)}-${pad(d)}` : "",
+      sex: val("sex"), hin: val("hin"), hin_version: val("ver"), hc_province: val("hc_type"),
+      sin: val("sin"), street: val("address"), city: val("city"), province: val("province"),
+      postal_code: val("postal"), phone: val("phone"), work_phone: val("phone2"),
+      cell: val("demo_cell"), email: val("email"), chart_no: val("chart_no"),
+    };
+  };
+  const fromJson = (data) => {
+    if (data && !data.firstName && !data.lastName) {
+      const inner = Object.values(data).find((v) => v && typeof v === "object" && (v.firstName || v.lastName));
+      if (inner) data = inner;
+    }
+    if (!data || !(data.firstName || data.lastName)) return null;
+    const address = data.address || {};
+    const extras = Array.isArray(data.extras) ? data.extras : [];
+    const extra = (key) => {
+      const hit = extras.find((e) => e && e.key === key);
+      return hit ? String(hit.value || "") : "";
+    };
+    return {
+      first_name: data.firstName || "", last_name: data.lastName || "",
+      dob: data.dobYear && data.dobMonth && data.dobDay ? `${data.dobYear}-${pad(data.dobMonth)}-${pad(data.dobDay)}` : "",
+      sex: data.sex || "", hin: data.hin || "", hin_version: data.ver || "", hc_province: data.hcType || "",
+      sin: data.sin || "", street: address.address || "", city: address.city || "",
+      province: address.province || "", postal_code: address.postal || "", phone: data.phone || "",
+      work_phone: data.alternativePhone || "", cell: extra("demo_cell"), email: data.email || "",
+      chart_no: data.chartNo || "",
+    };
+  };
+
+  // The patient's own page is open: read it directly
+  const here = fromDoc(document);
+  if (here) return { found: true, patient: here, via: "page" };
+
+  // The chart's patient number: in the address, or else the one the page links to most
+  let id = (location.href.match(/[?&](?:demographicNo|demographic_no|demographicId)=(\d+)/i) || [])[1];
+  if (!id) {
+    const counts = {};
+    for (const m of document.documentElement.innerHTML.slice(0, 2000000)
+      .matchAll(/demographic(?:_no|No|Id)=(\d+)/gi)) counts[m[1]] = (counts[m[1]] || 0) + 1;
+    id = Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0];
+  }
+  if (!id) return { found: false };
+
+  const first = location.pathname.split("/")[1];
+  const bases = [...new Set([first ? `${location.origin}/${first}` : null, location.origin].filter(Boolean))];
+  for (const base of bases) {
+    try {
+      const r = await fetch(`${base}/ws/rs/demographics/${id}`,
+        { credentials: "include", headers: { Accept: "application/json" } });
+      if (r.ok && /json/i.test(r.headers.get("content-type") || "")) {
+        const patient = fromJson(await r.json());
+        if (patient) return { found: true, patient, via: "service", id };
+      }
+    } catch (_e) { /* try the next way */ }
+    try {
+      const r = await fetch(`${base}/demographic/demographiccontrol.jsp?demographic_no=${id}` +
+        "&displaymode=edit&dboperation=search_detail", { credentials: "include" });
+      if (r.ok) {
+        const doc = new DOMParser().parseFromString(await r.text(), "text/html");
+        const patient = fromDoc(doc);
+        if (patient) return { found: true, patient, via: "edit page", id };
+      }
+    } catch (_e) { /* not OSCAR here */ }
+  }
+  return { found: false, id };
+}
+
+// The patient of the OSCAR chart in the active tab, or null.
+async function fsPatientFromActiveTab() {
+  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  if (!tab || !/^https?:/.test(tab.url || "")) return null;
+  let results;
+  try {
+    results = await chrome.scripting.executeScript({ target: { tabId: tab.id, allFrames: true }, func: fsReadOscarPatient });
+  } catch (_error) {
+    return null;
+  }
+  // The top page first, then frames
+  results.sort((a, b) => (a.frameId === 0 ? -1 : 0) - (b.frameId === 0 ? -1 : 0));
+  const hit = results.find((r) => r.result && r.result.found);
+  return hit ? hit.result.patient : null;
+}
+
+// Sends the chart's patient to FreeScribe. Returns the name FreeScribe linked, or null.
+async function fsLinkPatient() {
+  const patient = await fsPatientFromActiveTab();
+  if (!patient) return null;
+  const reply = await fsCall("/api/patient", { patient });
+  return reply.patient || null;
+}
