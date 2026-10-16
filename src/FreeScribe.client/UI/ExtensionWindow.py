@@ -21,10 +21,13 @@ STEPS = (
      "Click the puzzle icon in Chrome’s toolbar and pin FreeScribe, so its button is always there."),
     ("Pair it",
      "Click the FreeScribe button in Chrome and paste the code above. You only do this once."),
+    ("Turn on the floating panel",
+     "Open OSCAR, click the FreeScribe button and switch on “Floating panel on this site”. The panel "
+     "then also appears in OSCAR’s pop-up chart windows, which have no toolbar."),
 )
-USE = ("During a visit, use the FreeScribe button in Chrome (or Alt+Shift+R) to start, pause and stop. "
-       "When the note is ready, click in the OSCAR note box and press “Insert into EMR” "
-       "(or Alt+Shift+N). The note is also easy to copy.")
+USE = ("During a visit, use the floating panel (or Alt+Shift+R) to start, pause and stop. Drag it "
+       "anywhere, stick it to a side, or shrink it to a small button. When the note is ready, click "
+       "in the OSCAR note box and press “Insert into chart” (or Alt+Shift+N).")
 
 
 class ExtensionWindow:

@@ -70,15 +70,22 @@ async function fsShowBadge(status) {
 }
 
 /* ------------------------------------------------- putting text into the page */
-// Runs inside the EMR page (every frame): where is the cursor?
+// Runs inside the EMR page (every frame): where is the cursor? When the focus has moved
+// to the floating panel, the note box clicked last (remembered by frame.js) counts.
 function fsProbeFocus() {
-  const el = document.activeElement;
-  const textual = el && (el.tagName === "TEXTAREA" ||
+  const editable = (el) => !!el && !el.disabled && !el.readOnly && (el.tagName === "TEXTAREA" ||
     (el.tagName === "INPUT" && /^(text|search|)$/i.test(el.type || "")) || el.isContentEditable);
-  if (!textual || el.disabled || el.readOnly) return { field: false };
+  let el = document.activeElement;
+  let at = Date.now();
+  if (!editable(el)) {
+    el = window.__fsLastField;
+    at = window.__fsLastAt || 0;
+    if (!el || !el.isConnected || !editable(el)) return { field: false };
+  }
   return {
     field: true,
-    focused: document.hasFocus(),
+    focused: document.hasFocus() && document.activeElement === el,
+    at,
     name: el.getAttribute("aria-label") || el.name || el.id || el.tagName.toLowerCase(),
     length: el.isContentEditable ? (el.innerText || "").length : (el.value || "").length,
     big: el.tagName === "TEXTAREA" || el.isContentEditable,
@@ -87,17 +94,21 @@ function fsProbeFocus() {
 
 // Runs inside the chosen frame: put the text at the cursor (replacing any selection)
 function fsInsertAtCursor(text) {
-  const el = document.activeElement;
-  if (!el) return { done: false };
+  const editable = (e) => !!e && !e.disabled && !e.readOnly && (e.tagName === "TEXTAREA" ||
+    (e.tagName === "INPUT" && /^(text|search|)$/i.test(e.type || "")) || e.isContentEditable);
+  let el = document.activeElement;
+  if (!editable(el)) el = window.__fsLastField;
+  if (!editable(el) || !el.isConnected) return { done: false };
   if (el.isContentEditable) {
     el.focus();
     const ok = document.execCommand("insertText", false, text);
     if (!ok) el.innerText += text;
-  } else if ("value" in el) {
-    el.focus();
+  } else {
+    // A text box keeps its cursor position after it loses the focus
     const value = el.value || "";
     const start = el.selectionStart ?? value.length;
     const end = el.selectionEnd ?? start;
+    el.focus();
     const before = value.slice(0, start);
     // Start on a new line when the cursor is right after other text
     const lead = before && !/\n\s*$/.test(before) ? "\n" : "";
@@ -105,35 +116,115 @@ function fsInsertAtCursor(text) {
     for (const type of ["input", "change", "keyup"]) {
       el.dispatchEvent(new Event(type, { bubbles: true }));
     }
-  } else {
-    return { done: false };
   }
   return { done: true, name: el.name || el.id || el.tagName.toLowerCase() };
 }
 
-// Insert ``text`` where the cursor is in the active tab. Returns {done, reason, name}.
-async function fsInsertIntoActiveTab(text) {
+async function fsActiveTab() {
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-  if (!tab || !/^https?:/.test(tab.url || "")) {
-    return { done: false, reason: "page" };
-  }
+  return tab || null;
+}
+
+// Insert ``text`` where the cursor is in tab ``tabId``. Returns {done, reason, name}.
+async function fsInsertIntoTab(tabId, text) {
   let probes;
   try {
-    probes = await chrome.scripting.executeScript({ target: { tabId: tab.id, allFrames: true }, func: fsProbeFocus });
+    probes = await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, func: fsProbeFocus });
   } catch (_error) {
     return { done: false, reason: "page" };
   }
   const fields = probes.filter((p) => p.result && p.result.field);
   if (!fields.length) return { done: false, reason: "nofield" };
-  // The frame that has the keyboard focus wins; otherwise the only (or largest) text box with a cursor
-  fields.sort((a, b) => (b.result.focused - a.result.focused) || (b.result.big - a.result.big));
+  // The box with the keyboard focus wins, then the one clicked last, then a big note box
+  fields.sort((a, b) => (b.result.focused - a.result.focused) || (b.result.at - a.result.at) ||
+    (b.result.big - a.result.big));
   const target = fields[0];
   const [inserted] = await chrome.scripting.executeScript({
-    target: { tabId: tab.id, frameIds: [target.frameId] }, func: fsInsertAtCursor, args: [text],
+    target: { tabId, frameIds: [target.frameId] }, func: fsInsertAtCursor, args: [text],
   });
   return inserted && inserted.result && inserted.result.done
     ? { done: true, name: inserted.result.name }
     : { done: false, reason: "nofield" };
+}
+
+// Insert ``text`` where the cursor is in the active tab.
+async function fsInsertIntoActiveTab(text) {
+  const tab = await fsActiveTab();
+  if (!tab || !/^https?:/.test(tab.url || "")) return { done: false, reason: "page" };
+  return fsInsertIntoTab(tab.id, text);
+}
+
+/* ----------------------------------------- the floating panel on EMR sites */
+// The panel is shown on sites the clinician turned it on for (their OSCAR address),
+// including OSCAR's pop-up chart windows, which have no toolbar for the extension button.
+async function fsSites() {
+  const stored = await chrome.storage.local.get("sites");
+  return Array.isArray(stored.sites) ? stored.sites : [];
+}
+
+function fsSiteId(origin) {
+  return "fs-" + origin.replace(/[^a-z0-9]+/gi, "_");
+}
+
+function fsOriginOf(url) {
+  try {
+    const u = new URL(url);
+    return /^https?:$/.test(u.protocol) ? u.origin : "";
+  } catch (_error) {
+    return "";
+  }
+}
+
+// Registers the panel's scripts for ``origin`` (the site permission must be granted already)
+// and shows the panel in the tabs already open there.
+async function fsRegisterSite(origin) {
+  const id = fsSiteId(origin);
+  const existing = await chrome.scripting.getRegisteredContentScripts({ ids: [id + "-frames", id + "-panel"] });
+  if (existing.length < 2) {
+    if (existing.length) await chrome.scripting.unregisterContentScripts({ ids: existing.map((s) => s.id) });
+    await chrome.scripting.registerContentScripts([
+      { id: id + "-frames", matches: [origin + "/*"], js: ["frame.js"], allFrames: true,
+        runAt: "document_start", persistAcrossSessions: true },
+      { id: id + "-panel", matches: [origin + "/*"], js: ["panel.js"], allFrames: false,
+        runAt: "document_idle", persistAcrossSessions: true },
+    ]);
+  }
+  const tabs = await chrome.tabs.query({ url: origin + "/*" });
+  for (const tab of tabs) {
+    try {
+      await chrome.scripting.executeScript({ target: { tabId: tab.id, allFrames: true }, files: ["frame.js"] });
+      await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["panel.js"] });
+    } catch (_error) { /* a page Chrome does not let extensions into */ }
+  }
+}
+
+async function fsEnableSite(origin) {
+  const sites = await fsSites();
+  if (!sites.includes(origin)) await chrome.storage.local.set({ sites: [...sites, origin] });
+  await fsRegisterSite(origin);
+}
+
+async function fsDisableSite(origin) {
+  const sites = (await fsSites()).filter((s) => s !== origin);
+  await chrome.storage.local.set({ sites });
+  const id = fsSiteId(origin);
+  const existing = await chrome.scripting.getRegisteredContentScripts({ ids: [id + "-frames", id + "-panel"] });
+  if (existing.length) await chrome.scripting.unregisterContentScripts({ ids: existing.map((s) => s.id) });
+  const tabs = await chrome.tabs.query({ url: origin + "/*" });
+  for (const tab of tabs) {
+    try { await chrome.tabs.sendMessage(tab.id, { fs: "remove-panel" }); } catch (_error) { /* not shown */ }
+  }
+  try { await chrome.permissions.remove({ origins: [origin + "/*"] }); } catch (_error) { /* kept */ }
+}
+
+// After an update or a restart: make sure every turned-on site still has its scripts
+async function fsSyncSites() {
+  for (const origin of await fsSites()) {
+    const granted = await chrome.permissions.contains({ origins: [origin + "/*"] });
+    if (granted) {
+      try { await fsRegisterSite(origin); } catch (_error) { /* try again next start */ }
+    }
+  }
 }
 
 /* ------------------------------------------------------ patient from OSCAR */
@@ -223,13 +314,16 @@ async function fsReadOscarPatient() {
   return { found: false, id };
 }
 
-// The patient of the OSCAR chart in the active tab, or null.
-async function fsPatientFromActiveTab() {
-  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-  if (!tab || !/^https?:/.test(tab.url || "")) return null;
+// The patient of the OSCAR chart in tab ``tabId`` (the active tab when not given), or null.
+async function fsPatientFromTab(tabId) {
+  if (tabId === undefined) {
+    const tab = await fsActiveTab();
+    if (!tab || !/^https?:/.test(tab.url || "")) return null;
+    tabId = tab.id;
+  }
   let results;
   try {
-    results = await chrome.scripting.executeScript({ target: { tabId: tab.id, allFrames: true }, func: fsReadOscarPatient });
+    results = await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, func: fsReadOscarPatient });
   } catch (_error) {
     return null;
   }
@@ -240,8 +334,8 @@ async function fsPatientFromActiveTab() {
 }
 
 // Sends the chart's patient to FreeScribe. Returns the name FreeScribe linked, or null.
-async function fsLinkPatient() {
-  const patient = await fsPatientFromActiveTab();
+async function fsLinkPatient(tabId) {
+  const patient = await fsPatientFromTab(tabId);
   if (!patient) return null;
   const reply = await fsCall("/api/patient", { patient });
   return reply.patient || null;

@@ -7,7 +7,7 @@
 </head>
 <body>
   <header>
-    <img src="icons/icon32.png" alt="" width="22" height="22">
+    <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><rect width="24" height="24" rx="7" fill="#1f8a4c"/><g stroke="#fff" stroke-width="2.2" stroke-linecap="round"><path d="M7 10v4"/><path d="M10.3 7.5v9"/><path d="M13.7 9v6"/><path d="M17 11v2"/></g></svg>
     <span class="brand">FreeScribe</span>
     <span id="pill" class="pill">…</span>
     <button id="settings" class="icon-button" title="Pairing and shortcuts" aria-label="Settings">
@@ -54,6 +54,19 @@
     </div>
 
     <p id="message" class="message" hidden></p>
+  </section>
+
+  <!-- The floating panel: for OSCAR's pop-up chart windows, which have no toolbar -->
+  <section id="site" class="site" hidden>
+    <div class="site-text">
+      <div class="site-title">Floating panel on this site</div>
+      <div id="site-origin" class="muted small"></div>
+    </div>
+    <label class="switch" title="Show FreeScribe inside these pages, including OSCAR's pop-up chart windows">
+      <input id="site-toggle" type="checkbox" role="switch" aria-describedby="site-help">
+      <span></span>
+    </label>
+    <p id="site-help" class="hint wide-hint">Shows FreeScribe inside these pages, including OSCAR's pop-up chart windows that have no toolbar. Drag it anywhere or stick it to a side.</p>
   </section>
 
   <footer>

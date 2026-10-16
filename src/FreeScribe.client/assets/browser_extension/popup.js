@@ -211,5 +211,44 @@ chrome.commands.getAll((commands) => {
   $("keys").textContent = keys.length ? "Shortcuts: " + keys.join(" · ") : "Set keyboard shortcuts in chrome://extensions/shortcuts";
 });
 
+/* ---------------------------------------------- the floating panel on this site */
+let siteOrigin = "";
+
+async function showSite() {
+  const tab = await fsActiveTab();
+  siteOrigin = tab ? fsOriginOf(tab.url || "") : "";
+  $("site").hidden = !siteOrigin;
+  if (!siteOrigin) return;
+  $("site-origin").textContent = siteOrigin.replace(/^https?:\/\//, "");
+  const sites = await fsSites();
+  const granted = await chrome.permissions.contains({ origins: [siteOrigin + "/*"] });
+  $("site-toggle").checked = sites.includes(siteOrigin) && granted;
+}
+
+$("site-toggle").addEventListener("change", (event) => {
+  const on = event.target.checked;
+  if (!on) {
+    fsDisableSite(siteOrigin).then(() => message("The floating panel is off for this site.", "ok"));
+    return;
+  }
+  // Chrome asks the clinician to allow the extension on this site (it must be asked
+  // straight from the click, before anything else is awaited)
+  chrome.permissions.request({ origins: [siteOrigin + "/*"] }, async (granted) => {
+    if (!granted) {
+      event.target.checked = false;
+      message("The panel needs permission to show on this site.", "warn");
+      return;
+    }
+    try {
+      await fsEnableSite(siteOrigin);
+      message("The floating panel is on. It also appears in OSCAR's pop-up chart windows.", "ok");
+    } catch (error) {
+      event.target.checked = false;
+      message(`The panel could not be turned on here (${error.message}).`, "warn");
+    }
+  });
+});
+
+showSite();
 refresh();
 timer = setInterval(refresh, 1500);

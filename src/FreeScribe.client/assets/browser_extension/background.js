@@ -14,11 +14,74 @@ chrome.runtime.onInstalled.addListener((details) => {
     contexts: ["selection"],
   });
   chrome.alarms.create("freescribe-status", { periodInMinutes: 0.5 });
+  fsSyncSites();
   if (details.reason === "install") chrome.runtime.openOptionsPage();
 });
 
 chrome.runtime.onStartup.addListener(() => {
   chrome.alarms.create("freescribe-status", { periodInMinutes: 0.5 });
+  fsSyncSites();
+});
+
+// Tell every floating panel to check FreeScribe now (after a shortcut, say)
+async function refreshPanels() {
+  for (const origin of await fsSites()) {
+    try {
+      for (const tab of await chrome.tabs.query({ url: origin + "/*" })) {
+        chrome.tabs.sendMessage(tab.id, { fs: "refresh" }).catch(() => {});
+      }
+    } catch (_error) { /* permission removed */ }
+  }
+}
+
+// Starts recording; from a patient's chart, that patient is linked to the session first
+async function startRecording(tabId) {
+  let name = null;
+  try {
+    name = await fsLinkPatient(tabId);
+  } catch (error) {
+    if (error.kind === "refused") throw error;
+  }
+  await fsRecord("start");
+  return name;
+}
+
+/* ---------------------------------------------- requests from the floating panel */
+const panelActions = {
+  async call(msg) {
+    return fsCall(msg.path, msg.body);
+  },
+  async record(msg, tab) {
+    if (msg.action === "start") return { patient: await startRecording(tab.id) };
+    return fsRecord(msg.action);
+  },
+  async insert(msg, tab) {
+    return fsInsertIntoTab(tab.id, msg.text);
+  },
+  async link(_msg, tab) {
+    return { patient: await fsLinkPatient(tab.id) };
+  },
+  async options() {
+    await chrome.runtime.openOptionsPage();
+    return {};
+  },
+  async "hide-site"(_msg, tab) {
+    const origin = fsOriginOf(tab.url || "");
+    if (origin) await fsDisableSite(origin);
+    return {};
+  },
+};
+
+chrome.runtime.onMessage.addListener((msg, sender, reply) => {
+  const action = msg && panelActions[msg.fs];
+  if (!action || !sender.tab) return false;
+  action(msg, sender.tab)
+    .then((data) => {
+      reply({ ok: true, data });
+      if (msg.fs === "record" || msg.fs === "link") { refreshBadge(); refreshPanels(); }
+    })
+    .catch((error) => reply({ ok: false, kind: error.kind || "refused", error: error.message }));
+  return true;   // the reply comes later
 });
 
 function notify(title, message) {
@@ -61,16 +124,8 @@ chrome.commands.onCommand.addListener(async (command) => {
         notify("FreeScribe", status.writes_note ? "Stopped. Writing the note…" : "Stopped.");
       } else {
         // Starting from a patient's chart links that patient to the session
-        let name = null;
-        try {
-          name = await fsLinkPatient();
-        } catch (error) {
-          if (error.kind === "refused") {
-            notify("FreeScribe", error.message);
-            return;
-          }
-        }
-        await fsRecord("start");
+        const tab = await fsActiveTab();
+        const name = await startRecording(tab && /^https?:/.test(tab.url || "") ? tab.id : undefined);
         if (name) notify("FreeScribe", `Recording. Patient: ${name}`);
       }
     } else if (command === "pause-resume") {
@@ -90,5 +145,5 @@ chrome.commands.onCommand.addListener(async (command) => {
   } catch (error) {
     notify("FreeScribe", error.message);
   }
-  setTimeout(refreshBadge, 700);
+  setTimeout(() => { refreshBadge(); refreshPanels(); }, 700);
 });

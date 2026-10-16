@@ -44,6 +44,7 @@ class AppState:
     writes_note: bool = True        # False in Transcribe Only mode / "No Note Generation"
     speech_ready: bool = True
     patient: Dict[str, str] = field(default_factory=dict)   # the patient linked to the session (from the EMR)
+    seconds: float = 0.0            # length of the recording so far
 
 
 def note_for_emr(note: str) -> str:
@@ -88,6 +89,7 @@ class VisitControl:
             "paused": s.paused,
             "busy": s.busy,
             "writes_note": s.writes_note,
+            "seconds": round(float(s.seconds or 0), 1),
             "session": {
                 "id": s.session_id,
                 "title": s.title,

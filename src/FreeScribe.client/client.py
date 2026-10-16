@@ -2747,7 +2747,8 @@ def _extension_state():
         session_id=session.id if session else "", title=session.display_title if session else "",
         transcript=session.transcript if session else "", note=session.note if session else "",
         context=session.context if session else "", writes_note=not is_transcribe_only(),
-        patient=dict(session.patient) if session else {})
+        patient=dict(session.patient) if session else {},
+        seconds=workspace.recording_seconds() if session else 0.0)
 
 
 def _extension_code():
