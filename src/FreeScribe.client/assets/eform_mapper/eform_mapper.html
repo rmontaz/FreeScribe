@@ -1945,6 +1945,96 @@
     return [c1,c2,c3,c4];
   }
 
+  // ===== Stricter tick-box test (added by FreeScribe) =====
+  // Letters such as O, D, P, B and 0 pass the looser checks above: an O's curve covers each
+  // side's band, and a P's bowl with its stem looks like a square. A printed tick box has four
+  // straight sides meeting in square corners, a (nearly) empty inside, and nothing touching it
+  // from outside.
+  function isRealBox(clean,w,h,x1,y1,x2,y2){
+    const bw = x2-x1+1, bh = y2-y1+1, sz = Math.min(bw,bh);
+    if (sz < 5 || x1 < 2 || y1 < 2 || x2 >= w-2 || y2 >= h-2) return false;
+    const band = Math.max(1, Math.round(sz*0.14));
+    const on = (x,y) => clean[y*w+x] === 1;
+    // Longest unbroken stretch along a side (single-pixel gaps allowed), as a share of its length
+    function straight(len, hit){
+      let best=0, cur=0, gap=0;
+      for(let i=0;i<len;i++){
+        if(hit(i)){ cur += 1 + gap; gap = 0; if(cur>best) best=cur; }
+        else if(cur && gap < 1){ gap++; }
+        else { cur = 0; gap = 0; }
+      }
+      return best/Math.max(1,len);
+    }
+    const colHas = (x,ya,yb) => { for(let y=ya;y<=yb;y++) if(on(x,y)) return true; return false; };
+    const rowHas = (y,xa,xb) => { for(let x=xa;x<=xb;x++) if(on(x,y)) return true; return false; };
+    const top    = straight(bw, i => colHas(x1+i, y1, y1+band-1));
+    const bottom = straight(bw, i => colHas(x1+i, y2-band+1, y2));
+    const left   = straight(bh, i => rowHas(y1+i, x1, x1+band-1));
+    const right  = straight(bh, i => rowHas(y1+i, x2-band+1, x2));
+    if (Math.min(top,bottom,left,right) < 0.85) return false;
+    // Square corners: ink right at each corner (an O's curve leaves its corners empty)
+    const corner = (cx,cy) => countOnInRect(clean,w,h,cx,cy,cx+band-1,cy+band-1) > 0;
+    if (!(corner(x1,y1) && corner(x2-band+1,y1) && corner(x1,y2-band+1) && corner(x2-band+1,y2-band+1))) return false;
+    // Inside: empty, or a tick / cross at most
+    const ix1=x1+band+1, iy1=y1+band+1, ix2=x2-band-1, iy2=y2-band-1;
+    if (ix2 > ix1 && iy2 > iy1){
+      const inner = countOnInRect(clean,w,h,ix1,iy1,ix2,iy2) / ((ix2-ix1+1)*(iy2-iy1+1));
+      if (inner > 0.35) return false;
+    }
+    // Nothing joined on from outside (a P's stem below its bowl, the next letter of a word)
+    const limit = Math.max(1, Math.round(sz*0.12));
+    let t=0, b=0, l=0, r=0;
+    for(let x=x1;x<=x2;x++){
+      if(on(x,y1) && on(x,y1-1) && on(x,y1-2)) t++;
+      if(on(x,y2) && on(x,y2+1) && on(x,y2+2)) b++;
+    }
+    for(let y=y1;y<=y2;y++){
+      if(on(x1,y) && on(x1-1,y) && on(x1-2,y)) l++;
+      if(on(x2,y) && on(x2+1,y) && on(x2+2,y)) r++;
+    }
+    return t <= limit && b <= limit && l <= limit && r <= limit;
+  }
+
+  // A round option button: a thin, unbroken ring with an empty middle and empty corners,
+  // standing apart from other letters (an O inside a word has letters right beside it).
+  // (Added by FreeScribe.)
+  function isRealCircle(clean,w,h,x1,y1,x2,y2){
+    const bw = x2-x1+1, bh = y2-y1+1, sz = Math.min(bw,bh);
+    if (sz < 7 || x1 < 3 || y1 < 3 || x2 >= w-3 || y2 >= h-3) return false;
+    if (bw/bh < 0.85 || bw/bh > 1.18) return false;
+    const on = (x,y) => clean[y*w+x] === 1;
+    const cx = (x1+x2)/2, cy = (y1+y2)/2, r = (bw+bh)/4;
+    const band = Math.max(1.5, r*0.22);
+    let ring = 0; const N = 48;
+    for (let k=0;k<N;k++){
+      const a = k*2*Math.PI/N, ca = Math.cos(a), sa = Math.sin(a);
+      let hit = false;
+      for (let d=r-band; d<=r+0.5 && !hit; d+=0.5){
+        const x = Math.round(cx + ca*d), y = Math.round(cy + sa*d);
+        if (on(x,y)) hit = true;
+      }
+      if (hit) ring++;
+    }
+    if (ring < N*0.92) return false;
+    // Empty middle (or a small dot when the option is chosen)
+    let inner = 0, innerN = 0;
+    const ri = Math.max(1, r - band - 1.5);
+    for (let y=Math.floor(cy-ri); y<=Math.ceil(cy+ri); y++)
+      for (let x=Math.floor(cx-ri); x<=Math.ceil(cx+ri); x++)
+        if ((x-cx)*(x-cx)+(y-cy)*(y-cy) <= ri*ri){ innerN++; if(on(x,y)) inner++; }
+    if (innerN && inner/innerN > 0.45) return false;
+    // Empty corners: a ring, not a square
+    const cs = Math.max(1, Math.round(sz*0.12));
+    if (countOnInRect(clean,w,h,x1,y1,x1+cs-1,y1+cs-1) + countOnInRect(clean,w,h,x2-cs+1,y1,x2,y1+cs-1) +
+        countOnInRect(clean,w,h,x1,y2-cs+1,x1+cs-1,y2) + countOnInRect(clean,w,h,x2-cs+1,y2-cs+1,x2,y2) > 2) return false;
+    // Stands apart: no letter within a third of its size on either side
+    const gap = Math.max(3, Math.round(sz*0.35));
+    const ya = Math.round(y1 + bh*0.2), yb = Math.round(y2 - bh*0.2);
+    if (countOnInRect(clean,w,h,x2+2,ya,Math.min(w-1,x2+gap),yb) > 0) return false;
+    if (countOnInRect(clean,w,h,Math.max(0,x1-gap),ya,x1-2,yb) > 0) return false;
+    return true;
+  }
+
   function resetEverything(){
     const ok = confirm('Reset everything? This clears images, fields, imported templates, snippets, and export draft.');
     if(!ok) return;
@@ -2006,7 +2096,7 @@
   // Explicit 4-sided rectangle scan — finds hollow square outlines without needing
   // them to be a single connected component. Robust against thin PDF borders and
   // corner gaps that defeat the connected-component approach.
-  function rectScan(bin, w, h, minSz, maxSz, sideCovTh, innerMaxTh){
+  function rectScan(bin, w, h, minSz, maxSz, sideCovTh, innerMaxTh, accept){
     const results = [];
     // Build row-runs of dark pixels for fast horizontal lookup
     // rowRun[y] = sorted array of {x1,x2} runs
@@ -2115,6 +2205,8 @@
           if(rc < sideCovTh) continue;
           const id=innerDark(x1,y1,x2,y2,band);
           if(id > innerMaxTh) continue;
+          // A stricter test, when given, picks the size (added by FreeScribe)
+          if(accept && !accept(x1,y1,x2,y2)) continue;
 
           results.push({x1,y1,x2,y2,sz});
           break; // found best fit for this run start, move on
@@ -2124,9 +2216,190 @@
     return results;
   }
 
+  // ===== Text fields from lines (added by FreeScribe) =====
+  function textFieldsFromLines(clean, w, h, s, bands, minSeg, page, p){
+    const line = Math.max(18, p.naturalH*0.026) * s;          // one written line, in canvas px
+    const maxThick = Math.max(3, Math.round(h*0.012));
+    const lines = bands.filter(b => (b.y2-b.y1+1) <= maxThick && (b.x2-b.x1+1) >= minSeg)
+                       .sort((a,b) => a.y1-b.y1 || a.x1-b.x1);
+    const on = (x,y) => clean[y*w+x] === 1;
+    const overlap = (a,b) => Math.max(0, Math.min(a.x2,b.x2) - Math.max(a.x1,b.x1) + 1);
+    // A vertical rule at x between rows ya..yb (dark in nearly every row, allowing a pixel either side)
+    const rule = (x, ya, yb) => {
+      if (yb - ya < 4) return false;
+      let n = 0;
+      for (let y=ya; y<=yb; y++) if (on(x,y) || (x>0 && on(x-1,y)) || (x<w-1 && on(x+1,y))) n++;
+      return n >= (yb-ya+1)*0.85;
+    };
+    // Does a rule run down (or up) from x on this line, for at least a text line?
+    const ruleDown = (x, y) => rule(x, y+2, Math.min(h-1, y+Math.round(line*0.7)));
+    const ruleUp = (x, y) => rule(x, Math.max(0, y-Math.round(line*0.7)), y-2);
+    const fields = [];
+    lines.forEach((L, i) => {
+      // The nearest line above that spans most of this one: this line closes a row or a box
+      let top = null;
+      for (let j=i-1; j>=0; j--){
+        const M = lines[j];
+        if (M.y2 >= L.y1-2) continue;
+        if (overlap(M,L) >= 0.5*(L.x2-L.x1+1)){ top = M; break; }
+      }
+      let bounded = top && (L.y1 - top.y2) <= line*8;
+      // A tall space counts as one box only when it has sides; otherwise it's blank page
+      if (bounded && (L.y1 - top.y2) > line*2.2){
+        const sides = [Math.max(L.x1, top.x1)+1, Math.min(L.x2, top.x2)-1];
+        if (!sides.every(x => rule(x, top.y2+2, L.y1-2))) bounded = false;
+      }
+      // Only the top edge of a box or table (its sides start here and go down, not up): no field above it
+      const ends = [L.x1+1, L.x2-1];
+      if (!bounded && ends.every(x => ruleDown(x, L.y1)) && !ends.some(x => ruleUp(x, L.y1))) return;
+      const ceil = bounded ? top.y2 + 2 : Math.max(0, L.y1 - Math.round(line*1.25));
+      const floor = L.y1 - 2;
+      if (floor - ceil < line*0.45) return;
+      // Columns: split at vertical rules inside a bounded row
+      const cuts = [L.x1];
+      if (bounded){
+        for (let x=L.x1+3; x<L.x2-3; x++){
+          if (rule(x, ceil, floor)){ cuts.push(x); x += 3; }
+        }
+      }
+      cuts.push(L.x2);
+      for (let k=0; k<cuts.length-1; k++){
+        const x1 = cuts[k] + 3, x2 = cuts[k+1] - 3;
+        if (x2 - x1 < line*1.2) continue;
+        const y1 = ceil + 1, y2 = floor - 1;
+        // Where the printed label ends: its lowest row and its right-most column. Rows with only
+        // small marks (a tick box at the end of the row) don't count as label rows.
+        const cellW = x2 - x1 + 1;
+        let lowInk = -1, rightInk = -1;
+        for (let y=y1; y<=y2; y++){
+          let n = 0, last = -1;
+          for (let x=x1; x<=x2; x++) if (on(x,y)){ n++; last = x; }
+          if (n >= 2 && n > cellW*0.03){ lowInk = y; if (last > rightInk) rightInk = last; }
+        }
+        // Stop short of marks left in the blank part (tick boxes at the right end)
+        const trim = (ya) => {
+          let first = -1;
+          for (let x=x1; x<=x2 && first < 0; x++) for (let y=ya; y<=y2; y++) if (on(x,y)){ first = x; break; }
+          return first > x1 + cellW*0.5 ? first - Math.round(line*0.3) : x2;
+        };
+        let f = null;
+        if (lowInk < 0){ const ya = bounded ? y1 : Math.max(y1, floor - Math.round(line)); f = { x1, y1: ya, x2: trim(ya), y2 }; }
+        else if (y2 - lowInk >= line*0.6) f = { x1, y1: lowInk + 3, x2: trim(lowInk + 3), y2 };
+        else if (x2 - rightInk >= Math.max(line*2.5, (x2-x1)*0.25)){
+          // Label on the left of the row: the field is the blank part to its right
+          f = { x1: rightInk + Math.round(line*0.3), y1: Math.max(y1, y2 - Math.round(line)), x2, y2 };
+        }
+        if (!f || f.x2 - f.x1 < line*1.2 || f.y2 - f.y1 < line*0.4) continue;
+        const tall = (f.y2 - f.y1) > line*1.8;
+        fields.push({ page, x: f.x1/s, y: f.y1/s, width: (f.x2-f.x1)/s, height: (f.y2-f.y1)/s,
+                      type: tall ? 'textarea' : 'text', name: 'text', oscarTag: '' });
+      }
+    });
+    return fields;
+  }
+
+  // ===== Fields from a fillable PDF (added by FreeScribe) =====
+  // When a page came from a PDF that has its own form fields, those fields are exact: their
+  // position, kind and name. Auto Detect uses them for that page instead of guessing from
+  // the picture. Pages from scans, faxes, images or flat PDFs are detected from the picture.
+  const USE_PDF_FIELDS = true;
+  let pdfFieldsDoc = { key: null, doc: null };
+  async function pdfFormFields(pageNo){
+    const p = state.pages[pageNo];
+    if (!USE_PDF_FIELDS || !window.pdfjsLib || !state.sourcePdf || !state.sourcePdf.data || !p || !p.pdfPage || !p.naturalW) return null;
+    try {
+      if (pdfFieldsDoc.key !== state.sourcePdf.data){
+        const raw = atob(state.sourcePdf.data), bytes = new Uint8Array(raw.length);
+        for (let i=0;i<raw.length;i++) bytes[i] = raw.charCodeAt(i);
+        if (typeof ensurePdfWorker === 'function') await ensurePdfWorker();
+        pdfFieldsDoc = { key: state.sourcePdf.data, doc: await pdfjsLib.getDocument({ data: bytes }).promise };
+      }
+      const doc = pdfFieldsDoc.doc;
+      if (p.pdfPage > doc.numPages) return null;
+      const page = await doc.getPage(p.pdfPage);
+      const base = page.getViewport({ scale: 1 });
+      const vp = page.getViewport({ scale: p.naturalW / base.width });
+      const annots = await page.getAnnotations({ intent: 'display' });
+      const used = new Set(state.fields.map(f => f.name));
+      const unique = (name) => { let n = name, k = 2; while (used.has(n)) n = `${name}_${k++}`; used.add(n); return n; };
+      const clean = (v) => String(v || '').replace(/\[\d+\]/g, '').split('.').filter(Boolean).pop() || '';
+      const tidy = (v) => clean(v).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40);
+      const out = [];
+      annots.forEach(a => {
+        if (a.subtype !== 'Widget' || a.hidden || a.pushButton) return;
+        let type = null;
+        if (a.fieldType === 'Tx') type = a.multiLine ? 'textarea' : 'text';
+        else if (a.fieldType === 'Ch') type = 'text';
+        else if (a.fieldType === 'Btn' && (a.checkBox || a.radioButton)) type = 'checkbox';
+        if (!type) return;
+        const [x1, y1, x2, y2] = vp.convertToViewportRectangle(a.rect);
+        const x = Math.min(x1, x2), y = Math.min(y1, y2), width = Math.abs(x2 - x1), height = Math.abs(y2 - y1);
+        if (width < 2 || height < 2) return;
+        // The PDF's field name, or its tooltip when the name is only a code ("2-02")
+        const fromName = tidy(a.fieldName), fromTip = tidy(a.alternativeText);
+        let name = (/[a-z]{3}/.test(fromName) ? fromName : (fromTip || fromName)) || (type === 'checkbox' ? 'checkbox' : 'text');
+        if (type === 'checkbox'){
+          const opt = tidy(a.buttonValue || a.exportValue);
+          if (opt && !/^(on|yes|off|\d+)$/.test(opt) && !name.endsWith(opt)) name = `${name}_${opt}`;
+        }
+        out.push({ page: pageNo, x, y, width, height, type, name: unique(name), oscarTag: '',
+                   label: clean(a.alternativeText || a.fieldName) });
+      });
+      return out.length ? out : null;
+    } catch (err) {
+      console.warn('Could not read the PDF\'s form fields:', err);
+      return null;
+    }
+  }
+
+  // The tilt of a scanned page, in radians (0 when it is straight or can't be told). The page's
+  // dark pixels are projected onto rows at small trial angles; the angle at which the rows are
+  // sharpest (rules and text lines fall into single rows) is the tilt. (Added by FreeScribe.)
+  function estimateSkew(img){
+    const W = 900, sc = Math.min(1, W / img.width);
+    const w = Math.max(1, Math.round(img.width*sc)), h = Math.max(1, Math.round(img.height*sc));
+    const c = document.createElement('canvas'); c.width = w; c.height = h;
+    const ctx = c.getContext('2d', { willReadFrequently: true });
+    ctx.fillStyle = '#fff'; ctx.fillRect(0,0,w,h); ctx.drawImage(img,0,0,w,h);
+    const d = ctx.getImageData(0,0,w,h).data;
+    const xs = [], ys = [];
+    for (let y=0, i=0; y<h; y++) for (let x=0; x<w; x++, i+=4){
+      if (0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2] < 150 && ((x+y) & 1) === 0){ xs.push(x); ys.push(y); }
+    }
+    if (xs.length < 500) return 0;
+    const score = (deg) => {
+      const t = Math.tan(deg*Math.PI/180), rows = new Float64Array(h*2 + 10);
+      for (let k=0; k<xs.length; k++){ const r = Math.round(ys[k] - xs[k]*t) + h; if (r >= 0 && r < rows.length) rows[r]++; }
+      let sum = 0; for (let r=0; r<rows.length; r++) sum += rows[r]*rows[r];
+      return sum;
+    };
+    let best = 0, bestScore = score(0);
+    for (let deg=-3; deg<=3.0001; deg+=0.1){
+      const v = score(deg); if (v > bestScore){ bestScore = v; best = deg; }
+    }
+    for (let deg=best-0.09; deg<=best+0.09; deg+=0.02){
+      const v = score(deg); if (v > bestScore){ bestScore = v; best = deg; }
+    }
+    return Math.abs(best) >= 0.12 ? best*Math.PI/180 : 0;
+  }
+
   async function detectCurrentPage(){
     const page = state.currentPage, p = state.pages[page];
     if (!p.imgData || !p.naturalW) { msg('Upload page image first.', 'warn'); return; }
+    const fromPdf = await pdfFormFields(page);
+    if (fromPdf){
+      pushUndo();
+      const before = getPageFields(page).length;
+      fromPdf.forEach(f => {
+        const dup = state.fields.some(k => samePage(k.page,page) && Math.abs(k.x-f.x)<4 && Math.abs(k.y-f.y)<4 &&
+                                           Math.abs(k.width-f.width)<6 && Math.abs(k.height-f.height)<6);
+        if (!dup) addField(f);
+      });
+      const added = getPageFields(page).length - before;
+      renderAll();
+      msg(`This page came from a fillable PDF: took ${added} field(s) straight from the PDF's own form fields (exact positions and names).`, added ? 'ok' : 'warn');
+      return;
+    }
     const minCb = Number($('minCb').value) || 8;
     const maxCb = Number($('maxCb').value) || 32;
     const tolCb = Number($('tolCb').value) || 8;
@@ -2152,7 +2425,14 @@
       const ctx = c.getContext('2d', { willReadFrequently: true });
       ctx.fillStyle = '#fff';
       ctx.fillRect(0,0,w,h);
+      // Straighten a tilted scan first (added by FreeScribe): rules that run slightly downhill
+      // break into pieces and tables fall apart. Fields are turned back onto the page at the end.
+      const skew = estimateSkew(img);
+      if (skew){
+        ctx.translate(w/2, h/2); ctx.rotate(-skew); ctx.translate(-w/2, -h/2);
+      }
       ctx.drawImage(img,0,0,w,h);
+      ctx.setTransform(1,0,0,1,0,0);
 
       const data = ctx.getImageData(0,0,w,h).data;
       const gray = new Uint8Array(w*h);
@@ -2240,15 +2520,12 @@
         if(!merged) bands.push({x1:sg.x1,x2:sg.x2,y1:sg.y,y2:sg.y});
       });
 
-      bands.forEach((b,idx)=>{
-        const thick = b.y2-b.y1+1, bw = b.x2-b.x1+1;
-        if(thick > Math.max(3,Math.round(h*0.012)) || bw < minSeg) return;
-        const hNat = Math.max(18, p.naturalH*0.026);
-        const yLine = (b.y1+b.y2)/2;
-        const x = b.x1/s, wNat = bw/s;
-        const y = clamp(yLine/s - hNat*0.75, 0, p.naturalH-hNat);
-        newFields.push({page, x, y, width:wNat, height:hNat, type:'text', name:`text_${idx+1}`, oscarTag:''});
-      });
+      // Text fields from the lines (rewritten by FreeScribe). A field is the blank space you
+      // write in: above a fill-in line, or between two rules (a table row or a box), beside or
+      // under its printed label. Lines with words sitting on them (underlined headings, the
+      // bottoms of bold words, table rules under column headings) give no field, a table row
+      // gives one field per column, and the top edge of a box gives none of its own.
+      textFieldsFromLines(clean, w, h, s, bands, minSeg, page, p).forEach(f => newFields.push(f));
 
       // Connected component pass for checkboxes.
       const visited = new Uint8Array(w*h);
@@ -2304,14 +2581,18 @@
           const minSideCov = sideCov; // stronger rectangle requirement, helps reject P/A holes
           if(edgeCov.top < minSideCov || edgeCov.bottom < minSideCov || edgeCov.left < minSideCov || edgeCov.right < minSideCov) continue;
 
+          // Round option buttons (○) are real fields too; squares need ink at their corners
+          const round = isRealCircle(clean,w,h,minx,miny,maxx,maxy);
           const cs = Math.max(1, Math.round(Math.min(bw,bh)*0.18));
           const corners = cornerPresence(clean,w,h,minx,miny,maxx,maxy,cs);
           const cornerMin = Math.max(1, Math.floor(cs*cs*0.06));
-          if(corners.some(v => v < cornerMin)) continue;
+          if(!round && corners.some(v => v < cornerMin)) continue;
 
           if(ringDen < ringMin || ringDen > ringMax) continue;
           if(innerDen > innerMax) continue;
           if(fillDen < fillMin || fillDen > fillMax) continue;
+
+          if(!round && !isRealBox(clean,w,h,minx,miny,maxx,maxy)) continue;
 
           // classify as xbox if interior has significant marks.
           const type = 'checkbox';
@@ -2329,7 +2610,8 @@
       // Robust for thin-border PDF checkboxes that don't form a single connected component.
       const minSzPx = Math.max(4, Math.round(minNat * s));
       const maxSzPx = Math.round(maxNat * s);
-      const rectCandidates = rectScan(clean, w, h, minSzPx, maxSzPx, sideCov, innerMax);
+      const rectCandidates = rectScan(clean, w, h, minSzPx, maxSzPx, sideCov, innerMax,
+        (x1,y1,x2,y2) => isRealBox(clean, w, h, x1, y1, x2, y2));
       rectCandidates.forEach(r => {
         const bw = r.x2-r.x1+1, bh = r.y2-r.y1+1;
         const wNat = bw/s, hNat = bh/s;
@@ -2348,6 +2630,16 @@
         });
         if(!dup) dedupCb.push(cand);
       });
+
+      if (skew){
+        // Back onto the tilted page: turn each field's centre by the page's tilt
+        const W = w/s, H = h/s, cs = Math.cos(skew), sn = Math.sin(skew);
+        [...newFields, ...dedupCb].forEach(f => {
+          const cx = f.x + f.width/2 - W/2, cy = f.y + f.height/2 - H/2;
+          f.x = cx*cs - cy*sn + W/2 - f.width/2;
+          f.y = cx*sn + cy*cs + H/2 - f.height/2;
+        });
+      }
 
       pushUndo();
       const before = getPageFields(page).length;
