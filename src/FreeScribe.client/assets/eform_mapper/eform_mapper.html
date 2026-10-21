@@ -291,7 +291,7 @@
 
     <div class="row" style="margin-top:8px">
       <span id="tabsRow"></span>
-      <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="chkLabels" checked /> Show labels</label>
+      <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="chkLabels" /> Show labels</label>
       <span class="small">Shift/Ctrl/Cmd click = multi-select · Drag blank area = lasso · Arrow keys nudge · Shift+Arrow = 10px · Ctrl/Cmd+C/V copy/paste</span>
     </div>
 
@@ -531,7 +531,7 @@
     },
     fields: [],
     selected: new Set(),
-    showLabels: true,
+    showLabels: false,
     nextId: 1,
 
     templateFiles: [],
@@ -1115,28 +1115,9 @@
     getPageFields(page).forEach(f => overlay.appendChild(fieldElement(f, page)));
     if (state.snap.showGuides && state.snapGuides && samePage(state.snapGuides.page,page)){
       const { sx, sy } = getPageScale(page);
-      const isDragging = !!state.drag;
-      // During drag: show faint candidate lines from all snap targets
-      if (isDragging && state.snap.enabled){
-        const excluded = new Set([...state.selected]);
-        const cands = getSnapCandidates(page, excluded);
-        const p = state.pages[page];
-        const faint = 'rgba(37,99,235,.18)';
-        // Only draw lines that aren't too close to edges (avoids clutter)
-        cands.xs.forEach(cx => {
-          if (cx <= 0 || cx >= (p.naturalW||1)) return; // skip page-edge lines
-          const el = document.createElement('div');
-          el.style.cssText='position:absolute;top:0;bottom:0;width:1px;background:'+faint+';pointer-events:none;z-index:14;left:'+(cx*sx)+'px';
-          overlay.appendChild(el);
-        });
-        cands.ys.forEach(cy => {
-          if (cy <= 0 || cy >= (p.naturalH||1)) return;
-          const el = document.createElement('div');
-          el.style.cssText='position:absolute;left:0;right:0;height:1px;background:'+faint+';pointer-events:none;z-index:14;top:'+(cy*sy)+'px';
-          overlay.appendChild(el);
-        });
-      }
-      // Active snap guides (solid, bright, always shown when snap fires)
+      // Active snap guides only (solid, bright, shown when a snap actually fires).
+      // Faint candidate lines for every field were removed — with more than a
+      // few fields on a page they cluttered the canvas and obscured the form.
       if (Number.isFinite(state.snapGuides.x)){
         const v = document.createElement('div'); v.className='guide-v';
         v.style.left=(state.snapGuides.x*sx - 1)+'px'; overlay.appendChild(v);
