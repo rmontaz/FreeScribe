@@ -58,12 +58,18 @@ class ExtensionServer:
     """
 
     def __init__(self, port: int, code: Callable[[], str], get_routes: Dict[str, Callable[[], dict]],
-                 post_routes: Dict[str, Callable[[dict], dict]], user_errors: tuple = ()):
+                 post_routes: Dict[str, Callable[[dict], dict]], user_errors: tuple = (),
+                 bound_origin: Optional[Callable[[], str]] = None,
+                 bind_origin: Optional[Callable[[str], None]] = None):
         self.requested_port = int(port)
         self.code = code
         self.get_routes = dict(get_routes)
         self.post_routes = dict(post_routes)
         self.user_errors = tuple(user_errors)
+        # The extension that paired first is the only one let in afterwards (a new pairing
+        # code clears it): another extension in the same browser can't use the code
+        self.bound_origin = bound_origin
+        self.bind_origin = bind_origin
         self._httpd: Optional[ThreadingHTTPServer] = None
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
@@ -133,6 +139,16 @@ class _Handler(BaseHTTPRequestHandler):
         if not self._code_ok():
             self._error(HTTPStatus.UNAUTHORIZED, "The pairing code does not match. Copy it again from FreeScribe.")
             return False
+        origin = (self._origin() or "").lower()
+        if origin and self.owner.bound_origin is not None:
+            bound = (self.owner.bound_origin() or "").lower()
+            if bound and origin != bound:
+                self._error(HTTPStatus.FORBIDDEN,
+                            "FreeScribe is paired with another copy of the extension. In FreeScribe's Chrome "
+                            "extension window, make a New code and pair this one with it.")
+                return False
+            if not bound and self.owner.bind_origin is not None:
+                self.owner.bind_origin(origin)
         return True
 
     # ------------------------------------------------------------- replies
@@ -162,7 +178,10 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             result = function(*args)
         except self.owner.user_errors as error:
-            return self._error(HTTPStatus.CONFLICT, str(error))
+            body = {"error": str(error)}
+            if getattr(error, "code", ""):
+                body.update(code=error.code, details=getattr(error, "details", {}) or {})
+            return self._json(HTTPStatus.CONFLICT, body)
         except Exception as error:  # noqa: BLE001
             logger.exception(f"Browser extension request {path} failed: {error}")
             return self._error(HTTPStatus.INTERNAL_SERVER_ERROR, "FreeScribe could not do that. See FreeScribe's log.")

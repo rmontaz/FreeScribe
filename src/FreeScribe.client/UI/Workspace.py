@@ -525,6 +525,9 @@ class Workspace:
         gap = (0, Theme.px(16))
         self.date_chip = Chip(meta, tone="plain", icon_name="calendar", surface=bg)
         self.date_chip.pack(side="left", padx=gap)
+        # The patient linked from the EMR chart (by the browser extension); click to unlink
+        self.patient_chip = Chip(meta, tone="info", icon_name="user", surface=bg, command=self._open_patient_menu,
+                                 tooltip="Patient linked from the chart. Click to unlink.")
         self.time_chip = Chip(meta, text="00:00", tone="plain", icon_name="clock", surface=bg)
         self.time_chip.pack(side="left", padx=gap)
         self.lang_chip = Chip(meta, tone="plain", icon_name="globe", surface=bg,
@@ -1051,13 +1054,57 @@ class Workspace:
             return
         from services import patient_details
         was_empty = session.is_empty
+        old_name = patient_details.display_name(session.patient) if session.patient else ""
         session.patient = dict(details)
         name = patient_details.display_name(details)
-        if not session.title.strip() and name:
+        # A title that was only the previous patient's name follows the new patient
+        if name and (not session.title.strip() or (old_name and session.title.strip() == old_name)):
             session.title = name
             self.title_entry.set_value(name)
         self._touch(session, was_empty)
-        self.toast(f"Patient from the chart: {name}", icon_name="check")
+        self._refresh_patient_chip()
+        self.toast(f"Patient from the chart: {name}" if not old_name or old_name == name
+                   else f"Session moved from {old_name} to {name}", icon_name="check")
+
+    def clear_patient(self):
+        """Unlinks the chart's patient from the open session (a wrong chart was linked)."""
+        session = self.current
+        if session is None or not session.patient:
+            return
+        from services import patient_details
+        name = patient_details.display_name(session.patient)
+        session.patient = {}
+        if session.title.strip() == name:
+            session.title = ""
+            self.title_entry.set_value("")
+        self._touch(session, False)
+        self._refresh_patient_chip()
+        self.toast(f"Unlinked {name} from this session", icon_name="check")
+
+    def _refresh_patient_chip(self):
+        from services import patient_details
+        patient = self.current.patient if self.current is not None else {}
+        if patient:
+            text = patient_details.display_name(patient)
+            if patient.get("dob"):
+                text += f"  ·  {patient['dob']}"
+            self.patient_chip.set(text=text)
+            if not self.patient_chip.winfo_manager():
+                self.patient_chip.pack(side="left", padx=(0, Theme.px(16)), after=self.date_chip)
+        elif self.patient_chip.winfo_manager():
+            self.patient_chip.pack_forget()
+
+    def _open_patient_menu(self):
+        from services import patient_details
+        session = self.current
+        if session is None or not session.patient:
+            return
+        label = patient_details.display_name(session.patient)
+        popup_menu(self.patient_chip, [
+            {"label": f"Linked from the chart: {label}", "header": True},
+            {"label": "Unlink this patient", "command": self.clear_patient,
+             "enabled": not self.is_recording},
+        ])
 
     def flush_edits(self):
         """Make sure edits still waiting on the debounce timer reach the session."""
@@ -1222,10 +1269,13 @@ class Workspace:
         if not self.is_recording:
             self.time_chip.set(text=format_duration(session.duration), tone="plain", icon_name="clock", dot=None)
         self.lang_chip.set(text=self._act("get_language", default="Auto-detect") or "Auto-detect")
+        self._refresh_patient_chip()
 
     def _on_meta_configure(self, event):
         """Give the microphone name whatever room is left on the row; hide the language when it is tight."""
         fixed = sum(chip.winfo_reqwidth() + Theme.px(16) for chip in (self.date_chip, self.time_chip))
+        if self.patient_chip.winfo_manager():
+            fixed += self.patient_chip.winfo_reqwidth() + Theme.px(16)
         fixed += self.meter.winfo_reqwidth() + Theme.px(24)
         if self.busy_text:
             fixed += self.busy_chip.winfo_reqwidth() + Theme.px(8)

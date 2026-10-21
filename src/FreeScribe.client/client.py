@@ -286,6 +286,32 @@ def run_on_ui(function, *args, **kwargs):
     root.after(0, lambda: function(*args, **kwargs))
 
 
+def run_on_ui_and_wait(function, *args, timeout=5.0, **kwargs):
+    """
+    Runs ``function`` on the Tk main thread and waits for it, so a reply sent afterwards
+    reflects the change (the browser extension links a patient right after a new session).
+    Only for worker threads: on the main thread it would wait for itself.
+    """
+    if threading.current_thread() is threading.main_thread():
+        return function(*args, **kwargs)
+    done, result = threading.Event(), {}
+
+    def call():
+        try:
+            result["value"] = function(*args, **kwargs)
+        except Exception as error:  # noqa: BLE001 - handed back to the caller
+            result["error"] = error
+        finally:
+            done.set()
+
+    root.after(0, call)
+    if not done.wait(timeout):
+        raise TimeoutError("FreeScribe did not respond in time.")
+    if "error" in result:
+        raise result["error"]
+    return result.get("value")
+
+
 def report_error(message):
     """Shows an error to the user in a dismissible banner above the session."""
     logger.error(message)
@@ -2143,7 +2169,8 @@ def _ask_form_values(asked, source, mapping, form_title, cancel_event=None, prog
             reply = ""
         answers = form_filler.parse_answers(reply or "", len(group))
         if reply and not answers:
-            logger.warning(f"Could not read form answers from the model reply: {reply[:300]!r}")
+            # The reply holds patient information: log only its size, never its text
+            logger.warning(f"Could not read form answers from the model reply ({len(reply)} characters)")
         for number, field in enumerate(group, 1):
             value = form_filler.restore(answers.get(number, ""), mapping)
             values[field.name] = form_filler.normalize(field, value)
@@ -2751,6 +2778,20 @@ def _extension_state():
         seconds=workspace.recording_seconds() if session else 0.0)
 
 
+def _bind_extension_origin(origin):
+    """Remembers the extension that paired (see ExtensionServer); saved with the settings."""
+    app_settings.editable_settings[SettingsKeys.BROWSER_EXTENSION_ORIGIN.value] = origin
+    _extension_settings_changed()
+
+
+def _extension_new_session():
+    """A fresh session for the browser extension ("New session for this patient")."""
+    from services.browser_control import ControlError
+    if run_on_ui_and_wait(workspace.new_session) is None:
+        raise ControlError("FreeScribe can't start a new session right now (a window is open or the "
+                           "session list is locked).")
+
+
 def _extension_code():
     return str(app_settings.editable_settings.get(SettingsKeys.BROWSER_EXTENSION_CODE.value) or "")
 
@@ -2787,14 +2828,18 @@ def start_extension_server():
             pause=toggle_pause,
             resume=toggle_pause,
             add_context=lambda text: run_on_ui(workspace.append_context, text),
-            set_patient=lambda details: run_on_ui(workspace.set_patient, details),
+            set_patient=lambda details: run_on_ui_and_wait(workspace.set_patient, details),
+            clear_patient=lambda: run_on_ui_and_wait(workspace.clear_patient),
+            new_session=_extension_new_session,
             version=get_application_version())
         extension_server = ExtensionServer(
             port, code=_extension_code,
             get_routes={"/api/status": control.status, "/api/note": control.note},
             post_routes={"/api/record": control.record, "/api/context": control.context,
-                         "/api/patient": control.patient},
-            user_errors=(ControlError,))
+                         "/api/patient": control.patient, "/api/session": control.session},
+            user_errors=(ControlError,),
+            bound_origin=lambda: str(settings.get(SettingsKeys.BROWSER_EXTENSION_ORIGIN.value) or ""),
+            bind_origin=_bind_extension_origin)
     try:
         extension_server.start()
     except OSError as error:
@@ -2838,6 +2883,8 @@ def open_browser_extension():
 
     def renew():
         app_settings.editable_settings[SettingsKeys.BROWSER_EXTENSION_CODE.value] = new_code()
+        # A new code is a new pairing: whichever extension uses it first is let in
+        app_settings.editable_settings[SettingsKeys.BROWSER_EXTENSION_ORIGIN.value] = ""
         _extension_settings_changed()
 
     def show_folder():

@@ -147,3 +147,115 @@ def test_plain_note_removes_asterisks():
             "  * nested point\n\n**Plan:** ECG.\n*\nBP 140/90, 2*3 tabs")
     assert plain_note(note) == ("SOAP Note\n\nSubjective:\n- Chest pain for three days.\n- Takes metformin.\n"
                                 "  - nested point\n\nPlan: ECG.\n\nBP 140/90, 2*3 tabs")
+
+
+class TestPatientLinking:
+    """Linking the chart's patient: refused for another patient's session, switch, unlink, new session."""
+
+    RAMAN = {"last_name": "Raman", "first_name": "Priya", "dob": "1984-03-14"}
+    OKOYE = {"last_name": "Okoye", "first_name": "Daniel", "dob": "1991-07-30"}
+
+    @pytest.fixture
+    def setup(self):
+        state = bc.AppState(recording=False, paused=False, session_id="s1", title="")
+        calls = []
+
+        def new_session():
+            calls.append("new")
+            state.session_id, state.patient, state.transcript, state.note = "s2", {}, "", ""
+
+        control = bc.VisitControl(
+            state=lambda: state, start=lambda: None, stop=lambda: None, pause=lambda: None,
+            resume=lambda: None, add_context=lambda t: None,
+            set_patient=lambda d: setattr(state, "patient", dict(d)),
+            clear_patient=lambda: setattr(state, "patient", {}), new_session=new_session)
+        return state, control, calls
+
+    def test_link_then_other_patient_is_refused_with_details(self, setup):
+        state, control, _ = setup
+        assert control.patient({"patient": self.OKOYE})["patient"] == "Okoye, Daniel"
+        state.transcript = "visit so far"
+        with pytest.raises(bc.ControlError) as refused:
+            control.patient({"patient": self.RAMAN})
+        assert refused.value.code == "other_patient"
+        assert refused.value.details["current"] == "Okoye, Daniel"
+        assert refused.value.details["chart"] == "Raman, Priya"
+        assert refused.value.details["has_content"] is True
+        assert state.patient["last_name"] == "Okoye"            # unchanged
+
+    def test_switch_and_clear(self, setup):
+        state, control, _ = setup
+        control.patient({"patient": self.OKOYE})
+        assert control.patient({"patient": self.RAMAN, "action": "switch"})["patient"] == "Raman, Priya"
+        assert state.patient["last_name"] == "Raman"
+        assert control.patient({"action": "clear"})["unlinked"] == "Raman, Priya"
+        assert state.patient == {}
+        assert control.patient({"action": "clear"})["patient"] == ""   # nothing linked: fine
+
+    def test_no_switch_while_recording(self, setup):
+        state, control, _ = setup
+        control.patient({"patient": self.OKOYE})
+        state.recording = True
+        with pytest.raises(bc.ControlError):
+            control.patient({"patient": self.RAMAN, "action": "switch"})
+
+    def test_new_session(self, setup):
+        state, control, calls = setup
+        control.patient({"patient": self.OKOYE})
+        assert control.session({"action": "new"}) == {"ok": True}
+        assert calls == ["new"] and state.patient == {}
+        assert control.patient({"patient": self.RAMAN})["patient"] == "Raman, Priya"
+        state.recording = True
+        with pytest.raises(bc.ControlError):
+            control.session({"action": "new"})
+
+    def test_unknown_actions_are_refused(self, setup):
+        _, control, _ = setup
+        with pytest.raises(bc.ControlError):
+            control.patient({"patient": self.RAMAN, "action": "delete"})
+        with pytest.raises(bc.ControlError):
+            control.session({"action": "close"})
+
+    def test_server_passes_the_reason_to_the_extension(self, setup):
+        state, control, _ = setup
+        control.patient({"patient": self.OKOYE})
+        server = ExtensionServer(0, code=lambda: "ABCD-EFGH-JKMN-PQRS", get_routes={},
+                                 post_routes={"/api/patient": control.patient}, user_errors=(bc.ControlError,))
+        port = server.start()
+        try:
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{server.port}/api/patient", method="POST",
+                data=json.dumps({"patient": self.RAMAN}).encode(),
+                headers={CODE_HEADER: "ABCD-EFGH-JKMN-PQRS", "Content-Type": "application/json"})
+            with pytest.raises(urllib.error.HTTPError) as answer:
+                urllib.request.urlopen(req)
+            body = json.loads(answer.value.read())
+            assert answer.value.code == 409 and body["code"] == "other_patient"
+            assert body["details"]["chart"] == "Raman, Priya"
+        finally:
+            server.stop()
+
+
+def test_only_the_paired_extension_is_let_in():
+    bound = {"origin": ""}
+    server = ExtensionServer(0, code=lambda: "ABCD-EFGH-JKMN-PQRS", get_routes={"/api/status": lambda: {"ok": True}},
+                             post_routes={}, bound_origin=lambda: bound["origin"],
+                             bind_origin=lambda o: bound.update(origin=o))
+    server.start()
+
+    def ask(origin):
+        req = urllib.request.Request(f"http://127.0.0.1:{server.port}/api/status",
+                                     headers={CODE_HEADER: "ABCD-EFGH-JKMN-PQRS", "Origin": origin})
+        try:
+            return urllib.request.urlopen(req).status
+        except urllib.error.HTTPError as error:
+            return error.code
+    try:
+        assert ask("chrome-extension://ourextension") == 200
+        assert bound["origin"] == "chrome-extension://ourextension"
+        assert ask("chrome-extension://ourextension") == 200
+        assert ask("chrome-extension://someotherextension") == 403     # has the code, still refused
+        bound["origin"] = ""                                           # a new pairing code
+        assert ask("chrome-extension://someotherextension") == 200
+    finally:
+        server.stop()

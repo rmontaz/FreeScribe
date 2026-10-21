@@ -121,3 +121,11 @@ footer { padding: 9px 14px; border-top: 1px solid var(--border); }
 .switch input:checked + span { background: var(--primary); }
 .switch input:checked + span::after { transform: translateX(16px); }
 .switch input:focus-visible + span { outline: 2px solid var(--primary); outline-offset: 2px; }
+
+/* a question about the patient */
+.choice { margin-top: 10px; padding: 10px; border-radius: 12px; background: var(--warning-soft); display: grid; gap: 4px; }
+.choice[hidden] { display: none; }
+.choice-title { font-weight: 650; }
+.choice-buttons { display: grid; gap: 6px; margin-top: 6px; }
+.choice-buttons button { height: 34px; }
+.link-button.muted { color: var(--muted); }

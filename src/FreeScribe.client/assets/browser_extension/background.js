@@ -34,11 +34,13 @@ async function refreshPanels() {
   }
 }
 
-// Starts recording; from a patient's chart, that patient is linked to the session first
-async function startRecording(tabId) {
+// Starts recording; from a patient's chart, that patient is linked to the session first.
+// ``choice`` answers a session that belongs to someone else: "new" or "switch". Without it,
+// that case is refused with code "other_patient" so the clinician can choose.
+async function startRecording(tabId, choice) {
   let name = null;
   try {
-    name = await fsLinkPatient(tabId);
+    name = await fsLinkPatient(tabId, choice || "link");
   } catch (error) {
     if (error.kind === "refused") throw error;
   }
@@ -52,14 +54,23 @@ const panelActions = {
     return fsCall(msg.path, msg.body);
   },
   async record(msg, tab) {
-    if (msg.action === "start") return { patient: await startRecording(tab.id) };
+    if (msg.action === "start") return { patient: await startRecording(tab.id, msg.choice) };
     return fsRecord(msg.action);
+  },
+  async preview(_msg, tab) {
+    // Who is on this page, without linking anyone (the panel asks first)
+    return { patient: await fsPatientFromTab(tab.id) };
+  },
+  async unlink() {
+    return fsUnlinkPatient();
   },
   async insert(msg, tab) {
     return fsInsertIntoTab(tab.id, msg.text);
   },
-  async link(_msg, tab) {
-    return { patient: await fsLinkPatient(tab.id) };
+  async link(msg, tab) {
+    const name = await fsLinkPatient(tab.id, msg.mode || "link");
+    if (!name) throw new FsError("No single patient is open on this page. Open the patient's chart first.", "refused");
+    return { patient: name };
   },
   async options() {
     // OSCAR's chart is a pop-up window above the main Chrome window, so the settings open in
@@ -85,7 +96,8 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
       reply({ ok: true, data });
       if (msg.fs === "record" || msg.fs === "link") { refreshBadge(); refreshPanels(); }
     })
-    .catch((error) => reply({ ok: false, kind: error.kind || "refused", error: error.message }));
+    .catch((error) => reply({ ok: false, kind: error.kind || "refused", error: error.message,
+                              code: error.code || "", details: error.details || {} }));
   return true;   // the reply comes later
 });
 
@@ -131,7 +143,8 @@ chrome.commands.onCommand.addListener(async (command) => {
         // Starting from a patient's chart links that patient to the session
         const tab = await fsActiveTab();
         const name = await startRecording(tab && /^https?:/.test(tab.url || "") ? tab.id : undefined);
-        if (name) notify("FreeScribe", `Recording. Patient: ${name}`);
+        // System notifications can show on the lock screen: no patient names in them
+        notify("FreeScribe", name ? "Recording. The chart's patient is linked to this session." : "Recording.");
       }
     } else if (command === "pause-resume") {
       const status = await fsStatus();
@@ -148,7 +161,10 @@ chrome.commands.onCommand.addListener(async (command) => {
       }
     }
   } catch (error) {
-    notify("FreeScribe", error.message);
+    notify("FreeScribe", error.code === "other_patient"
+      ? "Not started: this FreeScribe session belongs to another patient. Use the FreeScribe panel on the chart " +
+        "to start a new session for this patient or move this one."
+      : error.message);
   }
   setTimeout(() => { refreshBadge(); refreshPanels(); }, 700);
 });

@@ -21,9 +21,11 @@ async function fsSaveSettings(code, port) {
 }
 
 class FsError extends Error {
-  constructor(message, kind) {
+  constructor(message, kind, code = "", details = {}) {
     super(message);
     this.kind = kind; // "offline" | "unpaired" | "refused"
+    this.code = code; // FreeScribe's reason, e.g. "other_patient"
+    this.details = details || {};
   }
 }
 
@@ -46,7 +48,7 @@ async function fsCall(path, body) {
   let data = {};
   try { data = await response.json(); } catch (_error) { /* empty reply */ }
   if (response.status === 401) throw new FsError(data.error || "The pairing code does not match.", "unpaired");
-  if (!response.ok) throw new FsError(data.error || `FreeScribe answered ${response.status}.`, "refused");
+  if (!response.ok) throw new FsError(data.error || `FreeScribe answered ${response.status}.`, "refused", data.code, data.details);
   return data;
 }
 
@@ -287,14 +289,9 @@ async function fsReadOscarPatient() {
   const here = fromDoc(document);
   if (here) return { found: true, patient: here, via: "page" };
 
-  // The chart's patient number: in the address, or else the one the page links to most
-  let id = (location.href.match(/[?&](?:demographicNo|demographic_no|demographicId)=(\d+)/i) || [])[1];
-  if (!id) {
-    const counts = {};
-    for (const m of document.documentElement.innerHTML.slice(0, 2000000)
-      .matchAll(/demographic(?:_no|No|Id)=(\d+)/gi)) counts[m[1]] = (counts[m[1]] || 0) + 1;
-    id = Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0];
-  }
+  // The chart's patient number, from the page's own address only. A page that merely links to
+  // patients (the day sheet, a search list) is not one patient's chart: nothing is guessed.
+  const id = (location.href.match(/[?&](?:demographicNo|demographic_no|demographicId)=(\d+)/i) || [])[1];
   if (!id) return { found: false };
 
   const first = location.pathname.split("/")[1];
@@ -334,16 +331,29 @@ async function fsPatientFromTab(tabId) {
   } catch (_error) {
     return null;
   }
-  // The top page first, then frames
+  // The top page first, then frames. Frames that show different patients: no patient.
   results.sort((a, b) => (a.frameId === 0 ? -1 : 0) - (b.frameId === 0 ? -1 : 0));
-  const hit = results.find((r) => r.result && r.result.found);
-  return hit ? hit.result.patient : null;
+  const hits = results.filter((r) => r.result && r.result.found);
+  const who = (p) => [p.last_name, p.first_name, p.dob].map((v) => String(v || "").toLowerCase()).join("|");
+  if (new Set(hits.map((h) => who(h.result.patient))).size > 1) return null;
+  return hits.length ? hits[0].result.patient : null;
 }
 
-// Sends the chart's patient to FreeScribe. Returns the name FreeScribe linked, or null.
-async function fsLinkPatient(tabId) {
+// "Raman, Priya", as OSCAR and FreeScribe show patients
+function fsPatientName(p) {
+  return [p && p.last_name, p && p.first_name].filter(Boolean).join(", ");
+}
+
+// Sends the chart's patient to FreeScribe. ``mode``: "link" (refused with code "other_patient"
+// when the session belongs to someone else), "switch" (move the session to this patient) or
+// "new" (a fresh session for this patient). Returns the name FreeScribe linked, or null when the
+// page shows no single patient.
+async function fsLinkPatient(tabId, mode = "link") {
   const patient = await fsPatientFromTab(tabId);
   if (!patient) return null;
-  const reply = await fsCall("/api/patient", { patient });
+  if (mode === "new") await fsCall("/api/session", { action: "new" });
+  const reply = await fsCall("/api/patient", { patient, action: mode === "switch" ? "switch" : "link" });
   return reply.patient || null;
 }
+
+const fsUnlinkPatient = () => fsCall("/api/patient", { action: "clear" });

@@ -87,9 +87,11 @@ function render(status) {
   if (!status.writes_note) parts.push("Transcribe-only mode");
   $("detail").textContent = parts.join(" · ");
   const patient = session && session.patient;
-  $("patient").textContent = patient ? `Patient: ${patient}` : "";
-  $("link").textContent = patient ? "Update from chart" : "Link patient from chart";
+  $("patient").textContent = patient ? `Patient: ${patient}${session.patient_dob ? " · born " + session.patient_dob : ""}` : "";
+  $("link").textContent = patient ? "Change" : "Link patient from chart";
   $("link").hidden = !session;
+  $("unlink").hidden = !patient;
+  $("unlink").disabled = !!status.recording;
 
   const record = $("record");
   if (status.recording) {
@@ -125,18 +127,61 @@ async function loadNote() {
   }
 }
 
-async function linkPatient(quiet) {
-  try {
-    const name = await fsLinkPatient();
-    if (name) {
-      if (!quiet) message(`Linked ${name} from the chart. Forms will use the chart’s details.`, "ok");
-      return name;
-    }
-    if (!quiet) message("No OSCAR patient chart was found in this tab. Open the patient’s chart and try again.", "warn");
-  } catch (error) {
-    message(error.message, "warn");
+// Asks a question about the patient with buttons: [{label, primary, run}]
+function ask(title, lines, buttons) {
+  const box = $("choice");
+  box.innerHTML = "";
+  const t = document.createElement("div"); t.className = "choice-title"; t.textContent = title; box.appendChild(t);
+  for (const line of lines) {
+    const p = document.createElement("div"); p.className = "small"; p.textContent = line; box.appendChild(p);
   }
-  return null;
+  const row = document.createElement("div"); row.className = "choice-buttons";
+  for (const b of buttons) {
+    const el = document.createElement("button");
+    el.className = b.primary ? "primary" : "secondary";
+    el.textContent = b.label;
+    el.addEventListener("click", async () => { box.hidden = true; if (b.run) await b.run(); setTimeout(refresh, 300); });
+    row.appendChild(el);
+  }
+  box.appendChild(row);
+  box.hidden = false;
+}
+
+const born = (dob) => dob ? ` (born ${dob})` : "";
+
+// "Link patient from chart": who is on this page? Ask before linking anyone.
+async function linkPatient() {
+  const p = await fsPatientFromTab();
+  if (!p) return message("No single patient is open in this tab. Open the patient’s chart, then link it.", "warn");
+  const name = fsPatientName(p);
+  const session = current && current.session;
+  const run = (mode) => async () => {
+    try {
+      const linked = await fsLinkPatient(undefined, mode);
+      message(mode === "new" ? `New session for ${linked}.` : mode === "switch" ? `This session is now for ${linked}.`
+        : `Linked ${linked} from the chart. Forms will use the chart’s details.`, "ok");
+    } catch (error) { message(error.message, "warn"); }
+  };
+  if (session && session.patient && session.patient.toLowerCase() !== name.toLowerCase()) {
+    ask("This session is for someone else", [`Session: ${session.patient}${born(session.patient_dob)}`,
+      `This chart: ${name}${born(p.dob)}`], [
+      { label: `New session for ${name}`, primary: true, run: run("new") },
+      { label: `Move this session to ${name}`, run: run("switch") },
+      { label: "Cancel" }]);
+  } else if (session && session.patient) {
+    message(`${name} is already linked.`, "ok");
+  } else {
+    ask("Link this chart to the session?", [`${name}${born(p.dob)}`],
+      [{ label: "Link", primary: true, run: run("link") }, { label: "Cancel" }]);
+  }
+}
+
+async function unlinkPatient() {
+  try {
+    const name = current && current.session && current.session.patient;
+    await fsUnlinkPatient();
+    message(name ? `Unlinked ${name}.` : "No patient was linked.", "ok");
+  } catch (error) { message(error.message, "warn"); }
 }
 
 async function act(action) {
@@ -147,6 +192,20 @@ async function act(action) {
     try {
       await fsLinkPatient();
     } catch (error) {
+      if (error.code === "other_patient") {
+        const d = error.details || {};
+        const go = (mode) => async () => {
+          try { await fsLinkPatient(undefined, mode); await fsRecord("start"); message(`Recording for ${d.chart}.`, "ok"); }
+          catch (e) { message(e.message, "warn"); }
+        };
+        ask("This session is for someone else", [`Session: ${d.current}${born(d.current_dob)}`,
+          `This chart: ${d.chart}${born(d.chart_dob)}`].concat(d.has_content
+            ? ["Moving it means the recording and note already in this session will belong to " + d.chart + "."] : []), [
+          { label: `New session for ${d.chart}`, primary: true, run: go("new") },
+          { label: `Move this session to ${d.chart}`, run: go("switch") },
+          { label: "Cancel" }]);
+        return;
+      }
       message(error.message, "warn");
       if (error.kind === "refused") return;
     }
@@ -165,7 +224,12 @@ async function act(action) {
 
 $("link").addEventListener("click", async () => {
   message("");
-  await linkPatient(false);
+  await linkPatient();
+  setTimeout(refresh, 300);
+});
+$("unlink").addEventListener("click", async () => {
+  message("");
+  await unlinkPatient();
   setTimeout(refresh, 300);
 });
 $("record").addEventListener("click", () => act(current && current.recording ? "stop" : "start"));

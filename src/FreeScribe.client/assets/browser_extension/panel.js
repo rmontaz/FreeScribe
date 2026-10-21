@@ -102,6 +102,23 @@ button:disabled { cursor: default; opacity: .55; }
 .linkbtn { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600;
   color: var(--accent); padding: 4px 8px; border-radius: 7px; flex: none; }
 .linkbtn:hover { background: var(--accent-soft); }
+.linkbtn.muted-btn { color: var(--muted); }
+.who-btns { display: flex; flex-direction: column; align-items: flex-end; gap: 0; flex: none; }
+.linkbtn.muted-btn:hover { background: var(--surface); color: var(--text); }
+.avatar.linked { background: var(--accent-soft) !important; color: var(--accent) !important; }
+.ask { border: 1px solid var(--line); border-radius: 12px; padding: 10px; background: var(--surface); display: grid; gap: 6px; }
+.ask.warn { background: var(--amber-soft); border-color: transparent; }
+.ask-title { font-weight: 650; }
+.ask-name { font-size: 14px; font-weight: 600; }
+.ask-line { font-size: 12.5px; }
+.ask-note { font-size: 11.5px; color: var(--amber); }
+.ask .sub { color: var(--faint); font-weight: 400; }
+.row2 { display: flex; gap: 8px; }
+.col { display: grid; gap: 6px; margin-top: 2px; }
+.small-primary { height: 34px; border-radius: 10px; padding: 0 12px; font-weight: 650; color: #fff; background: var(--accent); }
+.small-primary:hover { background: var(--accent-hover); }
+.row2 .small-primary { flex: 1; }
+.col .ghost { justify-content: center; }
 
 .timer { display: flex; align-items: center; gap: 10px; padding: 2px 2px 0; }
 .time { font-size: 26px; font-weight: 650; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
@@ -212,6 +229,7 @@ kbd { font: 600 10.5px system-ui, sans-serif; padding: 1px 5px; border-radius: 5
   let message = null;         // {text, kind}
   let messageTimer = null;
   let menuOpen = false;
+  let choice = null;          // a question about the patient: {kind: "link"|"start", chart, chartDob, current, currentDob, hasContent}
   let busyAction = false;
   let seconds = 0;
   let shownAt = Date.now();
@@ -331,7 +349,7 @@ kbd { font: 600 10.5px system-ui, sans-serif; padding: 1px 5px; border-radius: 5
       status = null;
       problem = { kind: reply.kind, message: reply.error };
     }
-    render();
+    try { render(); } catch (error) { console.warn("FreeScribe panel:", error); }
     schedule();
   }
 
@@ -349,6 +367,15 @@ kbd { font: 600 10.5px system-ui, sans-serif; padding: 1px 5px; border-radius: 5
     render();
     const reply = await send({ fs: "record", action });
     busyAction = false;
+    if (!reply.ok && reply.code === "other_patient"){
+      // The session belongs to someone else: ask whether to start a new one or move it
+      const d = reply.details || {};
+      choice = { kind: "start", chart: d.chart, chartDob: d.chart_dob, current: d.current,
+                 currentDob: d.current_dob, hasContent: !!d.has_content };
+      message = null;
+      render();
+      return;
+    }
     if (!reply.ok) say(reply.error, "warn");
     else if (action === "stop") say(status && status.writes_note ? "Stopped. FreeScribe is writing the note…" : "Stopped.", "ok");
     else if (action === "start" && reply.patient) say(`Recording for ${reply.patient}.`, "ok");
@@ -382,12 +409,67 @@ kbd { font: 600 10.5px system-ui, sans-serif; padding: 1px 5px; border-radius: 5
     say(ok ? `Copied. Paste with ${isMac ? "⌘V" : "Ctrl+V"}.` : "Copying was blocked here. Use Insert instead.", ok ? "ok" : "warn");
   }
 
+  // "Link chart": find out who is on this page, then ask before linking anyone
   async function link() {
-    const reply = await send({ fs: "link" });
-    if (reply.ok && reply.data.patient) say(`Linked ${reply.data.patient} from this chart.`, "ok");
-    else if (reply.ok) say("No patient found on this page. Open the patient's chart first.", "warn");
+    const reply = await send({ fs: "preview" });
+    if (!reply.ok) return say(reply.error, "warn");
+    const p = reply.data.patient;
+    if (!p) return say("No single patient is open on this page. Open the patient's chart, then link it.", "warn", 7000);
+    const s = status && status.session;
+    const name = [p.last_name, p.first_name].filter(Boolean).join(", ");
+    if (s && s.patient && s.patient.toLowerCase() === name.toLowerCase() &&
+        (!s.patient_dob || !p.dob || s.patient_dob === p.dob)) return say(`${name} is already linked.`, "ok");
+    choice = { kind: "link", chart: name, chartDob: p.dob || "", current: s && s.patient || "",
+               currentDob: s && s.patient_dob || "", hasContent: !!(s && (s.has_transcript || s.has_note)) };
+    message = null;
+    render();
+  }
+
+  async function unlink() {
+    const name = status && status.session && status.session.patient;
+    const reply = await send({ fs: "unlink" });
+    if (reply.ok) say(name ? `Unlinked ${name}. Link the right chart when it's open.` : "No patient was linked.", "ok", 7000);
     else say(reply.error, "warn");
     refresh();
+  }
+
+  // The answer to a choice: "link" (no one was linked), "switch" (move this session) or "new"
+  async function answer(mode) {
+    const c = choice;
+    choice = null;
+    if (!c) return;
+    if (c.kind === "start"){
+      busyAction = true; render();
+      const reply = await send({ fs: "record", action: "start", choice: mode === "link" ? "" : mode });
+      busyAction = false;
+      if (reply.ok) say(mode === "new" ? `New session for ${c.chart}. Recording.` : `Recording for ${c.chart}.`, "ok");
+      else say(reply.error, "warn", 8000);
+    } else {
+      const reply = await send({ fs: "link", mode });
+      if (reply.ok) say(mode === "new" ? `New session for ${reply.data.patient}.` :
+                        mode === "switch" ? `This session is now for ${reply.data.patient}.` :
+                        `Linked ${reply.data.patient} from this chart.`, "ok");
+      else say(reply.error, "warn", 8000);
+    }
+    setTimeout(refresh, 300);
+  }
+
+  function choiceHtml() {
+    const c = choice;
+    const born = (d) => d ? ` <span class="sub">· born ${esc(d)}</span>` : "";
+    if (!c.current){
+      return `<div class="ask"><div class="ask-title">Link this chart to the session?</div>
+        <div class="ask-name">${esc(c.chart)}${born(c.chartDob)}</div>
+        <div class="row2"><button class="small-primary" data-do="answer-link">Link</button>
+        <button class="ghost" data-do="answer-cancel">Cancel</button></div></div>`;
+    }
+    return `<div class="ask warn"><div class="ask-title">This session is for someone else</div>
+      <div class="ask-line">Session: <b>${esc(c.current)}</b>${born(c.currentDob)}</div>
+      <div class="ask-line">This chart: <b>${esc(c.chart)}</b>${born(c.chartDob)}</div>
+      <div class="col"><button class="small-primary" data-do="answer-new">New session for ${esc(c.chart)}</button>
+      <button class="ghost" data-do="answer-switch">Move this session to ${esc(c.chart)}</button>
+      <button class="ghost" data-do="answer-cancel">Cancel</button></div>
+      ${c.hasContent ? `<div class="ask-note">Moving it means the recording and note already in this session will belong to ${esc(c.chart)}.</div>` : ""}</div>`;
   }
 
   /* ------------------------------------------------------------------ rendering */
@@ -446,7 +528,10 @@ kbd { font: 600 10.5px system-ui, sans-serif; padding: 1px 5px; border-radius: 5
     const s = status && status.session;
     const chipText = ph === "working" && status.busy ? status.busy : label;
     let body = "";
-    if (ph === "offline") {
+    if (!status && !problem) {
+      // Not heard from FreeScribe yet (the panel opens on a new page before the first reply)
+      body = `<div class="working-text">Connecting to FreeScribe…</div>`;
+    } else if (ph === "offline") {
       const unpaired = problem && problem.kind === "unpaired";
       body = `<div class="offline"><p>${esc(problem ? problem.message : "")}</p>
         <div class="controls">${unpaired
@@ -454,11 +539,16 @@ kbd { font: 600 10.5px system-ui, sans-serif; padding: 1px 5px; border-radius: 5
           : `<button class="big" data-do="retry">Try again</button>`}</div></div>`;
     } else {
       const who = s && (s.patient || s.title) ? esc(s.patient || s.title) : "No session open";
-      const sub = s ? [s.has_transcript ? "Transcript" : "", s.has_note ? "Note" : ""].filter(Boolean).join(" · ") ||
+      const contents = s ? [s.has_transcript ? "Transcript" : "", s.has_note ? "Note" : ""].filter(Boolean).join(" · ") ||
         (status.writes_note ? "Nothing recorded yet" : "Transcribe-only mode") : "";
-      body += `<div class="who"><div class="avatar">${ICON.user}</div>
+      const sub = s && s.patient ? `Linked from the chart${s.patient_dob ? " · born " + s.patient_dob : ""}` : contents;
+      body += `<div class="who"><div class="avatar ${s && s.patient ? "linked" : ""}">${ICON.user}</div>
         <div class="names"><div class="name" title="${who}">${who}</div><div class="sub">${esc(sub)}</div></div>
-        <button class="linkbtn" data-do="link" title="Send this chart's patient to FreeScribe">${ICON.link}Link chart</button></div>`;
+        ${s && s.patient
+          ? `<span class="who-btns"><button class="linkbtn" data-do="link" title="Link the chart open on this page instead">Change</button>
+             <button class="linkbtn muted-btn" data-do="unlink" title="Unlink this patient from the session" ${status.recording ? "disabled" : ""}>Unlink</button></span>`
+          : `<button class="linkbtn" data-do="link" title="Link the patient whose chart is open on this page">${ICON.link}Link chart</button>`}</div>`;
+      if (choice) body += choiceHtml();
       if (status.recording) {
         body += `<div class="timer ${status.paused ? "paused" : ""}"><span class="time" data-time></span>
           <span class="bars"><span></span><span></span><span></span><span></span><span></span></span></div>
@@ -520,6 +610,11 @@ kbd { font: 600 10.5px system-ui, sans-serif; padding: 1px 5px; border-radius: 5
       case "insert": insert(); break;
       case "copy": copy(); break;
       case "link": link(); break;
+      case "unlink": unlink(); break;
+      case "answer-link": answer("link"); break;
+      case "answer-new": answer("new"); break;
+      case "answer-switch": answer("switch"); break;
+      case "answer-cancel": choice = null; render(); break;
       case "retry": refresh(); break;
       case "options": send({ fs: "options" }); break;
       case "menu": menuOpen = !menuOpen; render(); break;
@@ -572,7 +667,7 @@ kbd { font: 600 10.5px system-ui, sans-serif; padding: 1px 5px; border-radius: 5
 
   chrome.storage.local.get(KEY, (stored) => {
     if (stored && stored[KEY]) place = Object.assign(place, stored[KEY]);
-    render();
     refresh();
+    try { render(); } catch (error) { console.warn("FreeScribe panel:", error); }
   });
 })();

@@ -667,3 +667,26 @@ def test_note_missing_a_negative_offers_to_add_it(root, workspace):
     workspace.apply_note(workspace.current.id, workspace.current.note)   # nothing missing now
     pump(root)
     assert workspace.banner.winfo_manager() == ""
+
+
+def test_patient_from_the_chart_can_be_switched_and_unlinked(root, workspace):
+    raman = {"last_name": "Raman", "first_name": "Priya", "dob": "1984-03-14"}
+    okoye = {"last_name": "Okoye", "first_name": "Daniel", "dob": "1991-07-30"}
+    workspace.set_patient(okoye)
+    root.update()
+    session = workspace.current
+    assert session.patient["last_name"] == "Okoye" and session.title == "Okoye, Daniel"
+    assert workspace.patient_chip.winfo_manager() and "Okoye, Daniel" in workspace.patient_chip._text
+    # Moving the session: a title that was only the old patient's name follows
+    workspace.set_patient(raman)
+    assert session.title == "Raman, Priya" and session.patient["last_name"] == "Raman"
+    # Unlinking clears the chart's details and the title that came from them
+    workspace.clear_patient()
+    root.update()
+    assert session.patient == {} and session.title == ""
+    assert not workspace.patient_chip.winfo_manager()
+    # A title the clinician typed is kept
+    workspace.set_patient(raman)
+    session.title = "Priya - follow-up"
+    workspace.clear_patient()
+    assert session.title == "Priya - follow-up"
