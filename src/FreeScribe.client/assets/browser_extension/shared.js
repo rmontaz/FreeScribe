@@ -120,6 +120,13 @@ function fsInsertAtCursor(text) {
   return { done: true, name: el.name || el.id || el.tagName.toLowerCase() };
 }
 
+// Opens ``url`` in a small window of its own, in front of everything (also of a pop-up window)
+async function fsOpenInFront(url, width, height) {
+  const win = await chrome.windows.create({ url, type: "popup", width, height, focused: true });
+  try { await chrome.windows.update(win.id, { focused: true, drawAttention: true }); } catch (_error) { /* shown */ }
+  return win;
+}
+
 async function fsActiveTab() {
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   return tab || null;

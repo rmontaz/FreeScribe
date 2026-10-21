@@ -536,9 +536,17 @@ kbd { font: 600 10.5px system-ui, sans-serif; padding: 1px 5px; border-radius: 5
         }
         savePlace(); render(); break;
       }
-      case "hide-site": send({ fs: "hide-site" }); break;
+      case "hide-site": hideHere(); break;
       default: break;
     }
+  }
+
+  async function hideHere() {
+    say("Hiding the panel on this site…", "", 0);
+    const reply = await send({ fs: "hide-site" });
+    if (!reply.ok) { say(`The panel couldn't be turned off here (${reply.error}).`, "warn", 8000); return; }
+    // Gone from this page now; the background removes it from the site's other open pages
+    stop();
   }
 
   function stop() {

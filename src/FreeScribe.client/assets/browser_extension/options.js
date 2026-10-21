@@ -37,5 +37,6 @@ $("save").addEventListener("click", async () => {
 
 $("shortcuts").addEventListener("click", (event) => {
   event.preventDefault();
-  chrome.tabs.create({ url: "chrome://extensions/shortcuts" });
+  // A window of its own, so it isn't hidden behind OSCAR's pop-up chart
+  chrome.windows.create({ url: "chrome://extensions/shortcuts", type: "normal", focused: true });
 });

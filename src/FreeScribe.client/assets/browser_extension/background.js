@@ -62,13 +62,18 @@ const panelActions = {
     return { patient: await fsLinkPatient(tab.id) };
   },
   async options() {
-    await chrome.runtime.openOptionsPage();
+    // OSCAR's chart is a pop-up window above the main Chrome window, so the settings open in
+    // their own window in front of it (a tab would open behind the chart, out of sight)
+    await fsOpenInFront(chrome.runtime.getURL("options.html"), 600, 720);
     return {};
   },
   async "hide-site"(_msg, tab) {
     const origin = fsOriginOf(tab.url || "");
-    if (origin) await fsDisableSite(origin);
-    return {};
+    if (!origin) throw new FsError("This page's address could not be read.", "refused");
+    await fsDisableSite(origin);
+    notify("FreeScribe panel hidden", `It won't show on ${origin.replace(/^https?:\/\//, "")} any more. ` +
+      "To bring it back, click the FreeScribe button in Chrome's toolbar and switch on “Floating panel on this site”.");
+    return { origin };
   },
 };
 
