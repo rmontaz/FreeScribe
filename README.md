@@ -9,12 +9,12 @@
 
 | Computer | Installer |
 |---|---|
-| Mac with Apple chip (M1–M4) | [FreeScribeInstaller_arm64.pkg](https://github.com/rmontaz/FreeScribe/releases/download/v1.2.1-RC4-workspace/FreeScribeInstaller_arm64.pkg) |
-| Mac with Intel chip | [FreeScribeInstaller_x86_64.pkg](https://github.com/rmontaz/FreeScribe/releases/download/v1.2.1-RC4-workspace/FreeScribeInstaller_x86_64.pkg) |
-| Windows | [FreeScribeInstaller_windows.exe](https://github.com/rmontaz/FreeScribe/releases/download/v1.2.1-RC4-workspace/FreeScribeInstaller_windows.exe) (new, not yet tested on a Windows PC) |
-| Linux (x86_64) | [FreeScribe_linux_x86_64.tar.gz](https://github.com/rmontaz/FreeScribe/releases/download/v1.2.1-RC4-workspace/FreeScribe_linux_x86_64.tar.gz): unpack, then run `./run-freescribe.sh` |
+| Mac with Apple chip (M1–M4) | [FreeScribeInstaller_arm64.pkg](https://github.com/rmontaz/FreeScribe/releases/download/v1.2.1-RC5-workspace/FreeScribeInstaller_arm64.pkg) |
+| Mac with Intel chip | [FreeScribeInstaller_x86_64.pkg](https://github.com/rmontaz/FreeScribe/releases/download/v1.2.1-RC5-workspace/FreeScribeInstaller_x86_64.pkg) |
+| Windows | [FreeScribeInstaller_windows.exe](https://github.com/rmontaz/FreeScribe/releases/download/v1.2.1-RC5-workspace/FreeScribeInstaller_windows.exe) (tested automatically on Windows; not yet on a clinic PC) |
+| Linux (x86_64) | [FreeScribe_linux_x86_64.tar.gz](https://github.com/rmontaz/FreeScribe/releases/download/v1.2.1-RC5-workspace/FreeScribe_linux_x86_64.tar.gz): unpack, then run `./run-freescribe.sh` |
 
-All files are on the [release page](https://github.com/rmontaz/FreeScribe/releases/tag/v1.2.1-RC4-workspace). The installers are not code-signed, so the first time you open one:
+All files are on the [release page](https://github.com/rmontaz/FreeScribe/releases/tag/v1.2.1-RC5-workspace). The installers are not code-signed, so the first time you open one:
 
 - **Mac:** if macOS blocks it, open **System Settings → Privacy & Security** and click **Open Anyway**.
 - **Windows:** if SmartScreen says "Windows protected your PC", click **More info**, then **Run anyway**.
@@ -30,6 +30,12 @@ All files are on the [release page](https://github.com/rmontaz/FreeScribe/releas
 - **eForm mapper** (sidebar). Opens the OSCAR eForm Mapper in your browser. Its **Find fields** button places every field and checkbox exactly where the source PDF draws them, names them from their labels, and adds the OSCAR tags: the obvious ones (patient name, date of birth, health card number, today's date, physician, clinic) by rule, and the AI suggests tags for the rest. Scanned or faxed PDFs and page images (PNG, JPEG) work too: FreeScribe straightens the page, finds the boxes, lines and tick boxes in the picture and reads the labels with OCR. It all runs on your computer.
 - **Transcribe Only Mode** and the **No Note Generation** template record and transcribe without writing a note.
 - **Compact recorder.** A small always-on-top bar with record, pause, timer and level.
+- **Chrome extension for OSCAR** (sidebar → **Chrome extension**). A floating panel inside OSCAR pages, including its pop-up chart windows: start, pause and stop recording with a timer, then **Insert into chart** puts the note where the cursor is in the encounter box. Drag it anywhere, stick it to a side or shrink it to a button. Keyboard shortcuts: Alt+Shift+R record, Alt+Shift+P pause, Alt+Shift+N insert. It talks only to FreeScribe on the same computer, after pairing with a code.
+- **Patient details from the chart.** **Link chart** (or starting a recording from a chart) takes the patient's name, date of birth, health card and address from OSCAR, after asking. Forms then use the chart's details instead of the AI. A session can be unlinked or moved to another patient, and FreeScribe never guesses the patient from a page that lists several.
+- **More accurate form filling.** Forms are read correctly (choices, tick boxes, tables), the visit is first summarised into facts per topic and fields are filled from those, dates follow each form's layout, and the clinician's own details come from **Your details…**, never from the AI.
+- **Plain-text notes.** Notes and documents are kept free of markdown marks (no asterisks), so they paste cleanly into the EMR.
+- **eForm mapper Auto Detect without AI.** Fillable PDFs give their fields exactly; on flat PDFs and scans the detector no longer mistakes letters such as O and P for tick boxes, places text fields in the blank space beside or under labels (one per table column), and straightens tilted scans. Labels are hidden until **Show labels** is ticked.
+- **Offline eForm mapper to share.** `scripts/build_standalone_mapper.py` writes a single HTML file with everything it needs inside it, attached to each release as `eForm_Generator_FreeScribe_offline.html`.
 - **Third-party licences** are listed under **Help → Third-party licences**.
 
 ## Introduction
