@@ -61,7 +61,7 @@ def local_model_path(setting: str):
         return path, False
     # A relative path in the setting is relative to the app's folder when installed
     if path and not os.path.isabs(path) and _app_folder() != ".":
-        beside_app = os.path.join(_app_folder(), path)
+        beside_app = os.path.normpath(os.path.join(_app_folder(), path))
         if os.path.isfile(beside_app):
             return beside_app, False
     return bundled_model_path(), True

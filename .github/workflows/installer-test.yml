@@ -256,6 +256,9 @@ jobs:
           ls /Users/Shared/FreeScribe/models/*.gguf >/dev/null 2>&1 || { echo "The installer did not put the AI model in place"; exit 1; }
 
       - name: Start FreeScribe and wait for its models
+        env:
+          # No one is there to answer start-up questions such as the low-memory warning
+          FREESCRIBE_UNATTENDED: "1"
         run: |
           "$EXE" > results/startup.log 2>&1 &
           PID=$!
@@ -266,7 +269,10 @@ jobs:
             kill -0 $PID 2>/dev/null || { echo "FreeScribe exited on its own" >> results/startup.log; break; }
           done
           sleep 10; screencapture -x results/start_final.png 2>/dev/null || true
+          # Every FreeScribe process; more than one main window means the app relaunched itself
+          ps -axo pid,ppid,command | grep "[C]ontents/MacOS" | tee results/processes.txt
           kill $PID 2>/dev/null; sleep 3; kill -9 $PID 2>/dev/null || true
+          pkill -9 -f "$APP/Contents/MacOS" 2>/dev/null || true
 
       - name: Check the start
         run: python3 scripts/check_startup_log.py results/startup.log "Mac ${{ matrix.name }}"
@@ -329,6 +335,8 @@ jobs:
           echo "DISPLAY=:99" >> "$GITHUB_ENV"
 
       - name: Start FreeScribe and wait for its models
+        env:
+          FREESCRIBE_UNATTENDED: "1"
         run: |
           sleep 2
           ./FreeScribe/run-freescribe.sh < /dev/null > results/startup.log 2>&1 &
@@ -340,7 +348,10 @@ jobs:
             kill -0 $PID 2>/dev/null || { echo "FreeScribe exited on its own" >> results/startup.log; break; }
           done
           sleep 10; import -window root results/start_final.png 2>/dev/null
-          pkill -f "FreeScribe/FreeScribe" || true; sleep 3; pkill -9 -f "FreeScribe/FreeScribe" || true
+          ps -eo pid,ppid,args | grep "[F]reeScribe" | tee results/processes.txt
+          # The launcher runs "exec ./FreeScribe", so the app keeps the launcher's PID
+          kill $PID 2>/dev/null; sleep 3; pkill -9 -x FreeScribe || true; sleep 1
+          if pgrep -x FreeScribe > /dev/null; then echo "FreeScribe is still running after the start check"; exit 1; fi
 
       - name: Check the start
         run: python3 scripts/check_startup_log.py results/startup.log "Linux (Ubuntu 22.04)"

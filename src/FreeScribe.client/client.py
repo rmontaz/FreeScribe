@@ -11,6 +11,14 @@ and Research Students - Software Developer Alex Simko, Pemba Sherpa (F24), and N
 
 """
 
+import multiprocessing
+
+if __name__ == "__main__":
+    # In the installed app, Python's helper processes (such as the resource tracker that
+    # tqdm and torch start on macOS) are launched with the app itself. Without this call
+    # each of them opens a second FreeScribe, which then stops at "already running".
+    multiprocessing.freeze_support()
+
 import ctypes
 import io
 import sys
@@ -2970,10 +2978,15 @@ except (ValueError, TypeError):
     pass
 root.geometry(initial_size)
 
+# Unattended runs (--self-test, or the installer test's start check) must not wait on a
+# start-up question nobody is there to answer.
+UNATTENDED = bool(utils.arg_parser.args.self_test) or os.environ.get("FREESCRIBE_UNATTENDED") == "1"
+
 # ram checkj
 if utils.system.is_system_low_memory() and not app_settings.is_low_mem_mode():
     logger.warning("System has low memory.")
 
+if utils.system.is_system_low_memory() and not app_settings.is_low_mem_mode() and not UNATTENDED:
     popup_box = PopupBox(root, 
     title="Low Memory Warning", 
     message="Your system has low memory. Please consider enabling Low Memory Mode in the settings.",
@@ -2986,7 +2999,7 @@ if utils.system.is_system_low_memory() and not app_settings.is_low_mem_mode():
         app_settings.save_settings_to_file()
         logger.debug("Low Memory Mode enabled.")
 
-if (app_settings.editable_settings['Show Welcome Message']):
+if app_settings.editable_settings['Show Welcome Message'] and not UNATTENDED:
     window.show_welcome_message()
 
 #Wait for the UI root to be intialized then load the model. If using local llm.
