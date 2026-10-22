@@ -40,7 +40,9 @@ env:
 jobs:
   audio:
     name: Record the test visit
-    runs-on: macos-15
+    # Any Mac can speak the visit; Intel runners are easier to get than Apple-chip ones,
+    # and every other test waits for this job.
+    runs-on: macos-15-intel
     steps:
       - uses: actions/checkout@v4
       - name: Speak the test visit (two voices)
