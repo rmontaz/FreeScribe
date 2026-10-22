@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to test"
+        description: "Release tag to test (a draft test build, such as v1.2.1-RC5-workspace-test1, works too)"
         required: true
       platforms:
         description: "Which installers: all, or any of windows, mac, linux (comma separated)"
@@ -29,6 +29,10 @@ on:
         type: boolean
         required: false
         default: true
+
+# Write access lets the token see draft releases (test builds are drafts until they pass)
+permissions:
+  contents: write
 
 env:
   GH_TOKEN: ${{ github.token }}

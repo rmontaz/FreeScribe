@@ -18,7 +18,8 @@ jobs:
 
       - name: Create Version Text File for PyInstaller
         run: |
-          $tag = '${{ github.ref }}' -replace 'refs/tags/', ''
+          # A test build (tag ending in -test...) carries the version it is a candidate for
+          $tag = ('${{ github.ref }}' -replace 'refs/tags/', '') -replace '-test.*$', ''
           echo $tag > .\scripts\__version__
         shell: pwsh
 
@@ -178,7 +179,8 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Create Version Text File for PyInstaller
-        run: echo "${GITHUB_REF#refs/tags/}" > scripts/__version__
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"; echo "${tag%%-test*}" > scripts/__version__
 
       - name: Install Python
         uses: actions/setup-python@v5
@@ -271,7 +273,9 @@ jobs:
             ${{ steps.changelog.outputs.CHANGELOG }}
 
             For full changelog, see [the commits since last release](${{ github.server_url }}/${{ github.repository }}/compare/${{ steps.changelog.last_tag }}...${{ github.ref }})
-          draft: false
+          # Test builds (tags ending in -test...) stay drafts, visible only to the repo's
+          # owners, until the installer test passes and they are published.
+          draft: ${{ contains(github.ref_name, '-test') }}
           prerelease: ${{ steps.check_alpha.outputs.is_alpha == 'true' }}
           files: |
             FreeScribeInstaller_x86_64.pkg

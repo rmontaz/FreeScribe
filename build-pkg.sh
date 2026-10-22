@@ -59,6 +59,7 @@ mv dist/FreeScribe.app $DIR_NAME
 VERSION_FILE="$DIR_NAME/FreeScribe.app/Contents/Frameworks/__version__"
 echo "Creating __version__ file at $VERSION_FILE"
 tag="${GITHUB_REF#refs/tags/}"
+tag="${tag%%-test*}"   # a test build carries the version it is a candidate for
 echo "$tag" > "$VERSION_FILE"
 
 # Verify the __version__ file exists
