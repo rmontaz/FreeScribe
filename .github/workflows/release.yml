@@ -23,7 +23,8 @@ jobs:
         shell: pwsh
 
       - name: Install Python
-        uses: actions/setup-python@v1
+        # v5 downloads 3.10 when the runner image no longer has it pre-installed
+        uses: actions/setup-python@v5
         with:
           python-version: "3.10"
           architecture: "x64"
