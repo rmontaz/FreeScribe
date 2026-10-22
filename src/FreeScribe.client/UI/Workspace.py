@@ -1414,7 +1414,10 @@ class Workspace:
         self.rec_banner.set_time(text)
 
     def _tick(self):
-        if not self.frame.winfo_exists():
+        try:
+            if not self.frame.winfo_exists():
+                return
+        except tk.TclError:   # the app is closing; the timer stops quietly
             return
         if self.is_recording:
             self._update_timer()
@@ -1424,7 +1427,10 @@ class Workspace:
         self.root.after(400, self._tick)
 
     def _meter_tick(self):
-        if not self.frame.winfo_exists():
+        try:
+            if not self.frame.winfo_exists():
+                return
+        except tk.TclError:   # the app is closing; the timer stops quietly
             return
         level = self.mic.level if self.mic is not None else 0.0
         live = self.is_recording and not self.is_paused
@@ -1499,7 +1505,10 @@ class Workspace:
         self.storage_label.configure(text=text)
 
     def _status_tick(self):
-        if not self.frame.winfo_exists():
+        try:
+            if not self.frame.winfo_exists():
+                return
+        except tk.TclError:   # the app is closing; the timer stops quietly
             return
         self.refresh_status()
         self.root.after(2000, self._status_tick)

@@ -13,6 +13,7 @@ subscribe to changes with :meth:`add_listener`.
 This software is released under the AGPL-3.0 license.
 """
 
+import tkinter as tk
 from tkinter import ttk
 import pyaudio
 import numpy as np
@@ -272,7 +273,10 @@ class MicrophoneTestFrame:
         Only audio that is already buffered is read, so this never blocks the
         interface while it waits for the sound card.
         """
-        if not self.frame.winfo_exists():
+        try:
+            if not self.frame.winfo_exists():
+                return
+        except tk.TclError:   # the app is closing; the timer stops quietly
             return
 
         if not self.is_stream_active or self.stream is None:

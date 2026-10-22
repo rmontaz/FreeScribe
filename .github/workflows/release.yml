@@ -10,6 +10,10 @@ on:
 jobs:
   build-windows:
     runs-on: windows-latest
+    env:
+      # Build the AI engine (llama.cpp) for a standard CPU, not for whatever the build
+      # machine has: a "native" build crashed with an illegal instruction on other computers.
+      CMAKE_ARGS: "-DGGML_NATIVE=OFF"
     permissions:
       contents: write
     steps:
@@ -90,16 +94,33 @@ jobs:
   
   build-macos-intel:
     runs-on: macos-15-intel   # macos-13 runners are retired
+    env:
+      # Build the AI engine (llama.cpp) for a standard CPU, not for whatever the build
+      # machine has: a "native" build crashed with an illegal instruction on other computers.
+      CMAKE_ARGS: "-DGGML_NATIVE=OFF"
+      # python.org's Python is built for both chips; compile packages for Intel only
+      ARCHFLAGS: "-arch x86_64"
     permissions:
       contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.10"
+      - name: Install Python (python.org, with its own Tcl/Tk 8.6)
+        # The runner's own Python 3.10 on Intel was built for Tk 8.5 but loads Homebrew's
+        # Tk 8.6, so tkinter cannot open a window there; python.org's build brings a
+        # matching Tk inside it.
+        run: |
+          curl -fsSL -o python.pkg https://www.python.org/ftp/python/3.10.11/python-3.10.11-macos11.pkg
+          sudo installer -pkg python.pkg -target /
+          /Library/Frameworks/Python.framework/Versions/3.10/bin/python3.10 -m venv "$RUNNER_TEMP/py"
+          "$RUNNER_TEMP/py/bin/python" -m pip install -q --upgrade pip
+          echo "$RUNNER_TEMP/py/bin" >> "$GITHUB_PATH"
+
+      - name: Check that tkinter works
+        run: |
+          which python
+          python -c "import tkinter, sys; r = tkinter.Tk(); r.withdraw(); v = r.eval('info patchlevel'); print('Tk', v, r.eval('set tk_library')); r.destroy(); sys.exit(0 if v.startswith('8.6') else 1)"
 
       - name: Install PortAudio
         run: |
@@ -131,6 +152,10 @@ jobs:
   
   build-macos-arm:
     runs-on: macos-latest
+    env:
+      # Build the AI engine (llama.cpp) for a standard CPU, not for whatever the build
+      # machine has: a "native" build crashed with an illegal instruction on other computers.
+      CMAKE_ARGS: "-DGGML_NATIVE=OFF"
     permissions:
       contents: write
     steps:
@@ -172,6 +197,10 @@ jobs:
 
   build-linux:
     runs-on: ubuntu-22.04
+    env:
+      # Build the AI engine (llama.cpp) for a standard CPU, not for whatever the build
+      # machine has: a "native" build crashed with an illegal instruction on other computers.
+      CMAKE_ARGS: "-DGGML_NATIVE=OFF"
     permissions:
       contents: write
     steps:
