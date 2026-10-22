@@ -35,7 +35,6 @@ All files are on the [release page](https://github.com/rmontaz/FreeScribe/releas
 - **More accurate form filling.** Forms are read correctly (choices, tick boxes, tables), the visit is first summarised into facts per topic and fields are filled from those, dates follow each form's layout, and the clinician's own details come from **Your details…**, never from the AI.
 - **Plain-text notes.** Notes and documents are kept free of markdown marks (no asterisks), so they paste cleanly into the EMR.
 - **eForm mapper Auto Detect without AI.** Fillable PDFs give their fields exactly; on flat PDFs and scans the detector no longer mistakes letters such as O and P for tick boxes, places text fields in the blank space beside or under labels (one per table column), and straightens tilted scans. Labels are hidden until **Show labels** is ticked.
-- **Offline eForm mapper to share.** `scripts/build_standalone_mapper.py` writes a single HTML file with everything it needs inside it, attached to each release as `eForm_Generator_FreeScribe_offline.html`.
 - **Third-party licences** are listed under **Help → Third-party licences**.
 
 ## Introduction
