@@ -9,6 +9,7 @@
 
 | Computer | Installer |
 |---|---|
+| Mac with Apple chip (M1–M4) | [FreeScribeInstaller_arm64.pkg](https://github.com/rmontaz/FreeScribe/releases/download/v1.2.1-RC5-workspace/FreeScribeInstaller_arm64.pkg) |
 | Mac with Intel chip | [FreeScribeInstaller_x86_64.pkg](https://github.com/rmontaz/FreeScribe/releases/download/v1.2.1-RC5-workspace/FreeScribeInstaller_x86_64.pkg) |
 | Windows | [FreeScribeInstaller_windows.exe](https://github.com/rmontaz/FreeScribe/releases/download/v1.2.1-RC5-workspace/FreeScribeInstaller_windows.exe) (tested automatically on Windows; not yet on a clinic PC) |
 | Linux (x86_64) | [FreeScribe_linux_x86_64.tar.gz](https://github.com/rmontaz/FreeScribe/releases/download/v1.2.1-RC5-workspace/FreeScribe_linux_x86_64.tar.gz): unpack, then run `./run-freescribe.sh` |
