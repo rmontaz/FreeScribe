@@ -435,6 +435,9 @@ RATE = 16000
 silent_warning_duration = 0
 # The session a note is currently being generated for
 generation_session_id = None
+# The note template of the note being written (taken when writing starts, so opening another
+# session meanwhile can't change it)
+generation_template = None
 
 # Application flags
 is_audio_processing_realtime_canceled = threading.Event()
@@ -1464,7 +1467,7 @@ def send_and_receive():
 
 def start_note_generation(from_recording=False):
     """Collects the transcript and context of the current session and starts note generation."""
-    global user_message, generation_session_id
+    global user_message, generation_session_id, generation_template
     workspace.flush_edits()
     session = workspace.current
     transcript = session.transcript.strip() if session else ""
@@ -1480,6 +1483,7 @@ def start_note_generation(from_recording=False):
 
     user_message = transcript
     generation_session_id = session.id
+    generation_template = NoteStyleSelector.current_style
     workspace.hide_warning(kind="error")
     start_flashing("Creating note")
     # Context the clinician typed in is sent along with the transcript
@@ -1527,7 +1531,7 @@ def update_gui_with_response(response_text):
 
         # Models write markdown (**Subjective:**, * bullets); keep the note as plain text
         text = plain_note(text)
-        workspace.apply_note(generation_session_id, text, NoteStyleSelector.current_style)
+        workspace.apply_note(generation_session_id, text, generation_template or NoteStyleSelector.current_style)
         if storing_notes_locally():
             save_notes_history()
 
@@ -1779,7 +1783,8 @@ def generate_note(formatted_message, cancel_event):
     """
     try:
         summary = None
-        current_prompt_info = NoteStyleSelector.get_current_prompt_info()
+        current_prompt_info = (NoteStyleSelector.get_prompt_info(generation_template) if generation_template
+                               else NoteStyleSelector.get_current_prompt_info())
         # The chosen level of detail is added to the template's closing instructions
         post_prompt = f"{current_prompt_info.post_prompt} {get_detail_instruction()}".strip()
         if use_aiscribe:
@@ -2977,6 +2982,23 @@ def _extension_template(payload):
     return {"ok": True, "template": workspace.template_state()}
 
 
+def _extension_inserted(payload):
+    """The extension put a session's note into the EMR: remember it on the session."""
+    from services.browser_control import ControlError
+    session = session_store.get(str(payload.get("session_id", "")))
+    if session is None:
+        raise ControlError("That session is not in FreeScribe any more.")
+
+    def record():
+        session.record_insert(str(payload.get("chart", ""))[:120])
+        workspace._touch(session)
+        if storing_notes_locally():
+            save_notes_history()
+
+    run_on_ui_and_wait(record)
+    return {"ok": True, "at": session.inserted_at}
+
+
 def _extension_attention(payload):
     """The extension answers FreeScribe's waiting question, or dismisses the error it shows."""
     from services.browser_control import ControlError
@@ -3011,6 +3033,8 @@ def _extension_sessions():
     for session in sorted(list(session_store), key=lambda s: s.updated or "", reverse=True):
         out.append({"id": session.id, "title": session.display_title, "note": session.note,
                     "patient": dict(session.patient or {}), "updated": session.updated,
+                    "created": session.created, "inserted_at": session.inserted_at,
+                    "recording": bool(is_recording) and session is workspace.current,
                     "busy": session.id == generation_session_id and bool(workspace.busy_text)})
     return out
 
@@ -3076,7 +3100,8 @@ def start_extension_server():
             post_routes={"/api/record": control.record, "/api/context": control.context,
                          "/api/patient": control.patient, "/api/session": control.session,
                          "/api/dictate": voice.dictate, "/api/eform": voice.eform,
-                         "/api/attention": _extension_attention, "/api/note_for": control.note_for, "/api/template": _extension_template},
+                         "/api/attention": _extension_attention, "/api/note_for": control.note_for,
+                         "/api/inserted": _extension_inserted, "/api/template": _extension_template},
             user_errors=(ControlError, VoiceError),
             body_limits={"/api/eform": 25 * 1024 * 1024},
             bound_origin=lambda: str(settings.get(SettingsKeys.BROWSER_EXTENSION_ORIGIN.value) or ""),

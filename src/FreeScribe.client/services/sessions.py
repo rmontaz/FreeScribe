@@ -106,6 +106,8 @@ class Session:
     # The patient's details as the EMR has them (see services.patient_details), e.g. from
     # the OSCAR chart through the Chrome extension; used to fill demographic boxes on forms
     patient: Dict[str, str] = field(default_factory=dict)
+    # Each time the note was put into the EMR through the browser extension: {"at": ISO time, "chart": name}
+    inserts: List[dict] = field(default_factory=list)
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     created: str = field(default_factory=lambda: _now().isoformat())
     updated: str = field(default_factory=lambda: _now().isoformat())
@@ -189,7 +191,21 @@ class Session:
             "documents": [document.to_dict() for document in self.documents],
             "chat": [dict(message) for message in self.chat],
             "patient": dict(self.patient),
+            "inserts": [dict(i) for i in self.inserts],
         }
+
+    def record_insert(self, chart: str = "") -> dict:
+        """The note was put into the EMR (into ``chart``'s chart)."""
+        entry = {"at": _now().replace(microsecond=0).isoformat(), "chart": chart}
+        self.inserts.append(entry)
+        self.inserts[:] = self.inserts[-50:]
+        self.touch()
+        return entry
+
+    @property
+    def inserted_at(self) -> str:
+        """When the note was last put into the EMR ("" when never)."""
+        return self.inserts[-1]["at"] if self.inserts else ""
 
     def add_chat(self, role: str, text: str) -> dict:
         """Append a chat entry and return it."""
@@ -236,6 +252,8 @@ class Session:
             patient={str(k): str(v) for k, v in (data.get("patient") or {}).items()
                      if isinstance(v, (str, int, float)) and str(v).strip()}
             if isinstance(data.get("patient"), dict) else {},
+            inserts=[{"at": str(i.get("at") or ""), "chart": str(i.get("chart") or "")}
+                     for i in (data.get("inserts") or []) if isinstance(i, dict)][-50:],
             id=str(data.get("id") or uuid.uuid4().hex[:12]),
             created=created_text,
             updated=str(data.get("updated") or created_text),

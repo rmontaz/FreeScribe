@@ -34,3 +34,19 @@ def test_template_for_this_session_and_for_new_sessions(root, workspace, monkeyp
     workspace.new_session()
     assert NoteStyleSelector.current_style == other
     assert not workspace.choose_template("No such template")
+
+
+def test_each_session_keeps_its_template(root, workspace):
+    from UI.NoteStyleSelector import NoteStyleSelector
+    names = [n for n in NoteStyleSelector.template_names() if n != NoteStyleSelector.NO_NOTE_STYLE]
+    first, other = names[0], names[1]
+    workspace.choose_template(first)
+    a = workspace.current
+    a.transcript = "Visit A."
+    b = workspace.new_session()
+    workspace.choose_template(other)
+    assert a.template == first and b.template == other
+    workspace.select_session(a)
+    assert NoteStyleSelector.current_style == first          # opening A again brings A's template back
+    workspace.select_session(b)
+    assert NoteStyleSelector.current_style == other

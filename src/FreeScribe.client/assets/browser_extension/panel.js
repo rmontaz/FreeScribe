@@ -113,6 +113,15 @@ button:disabled { cursor: default; opacity: .55; }
 .who-btns { display: flex; flex-direction: column; align-items: flex-end; gap: 0; flex: none; }
 .linkbtn.muted-btn:hover { background: var(--surface); color: var(--text); }
 .body > * { min-width: 0; }
+.today { border: 1px solid var(--line); border-radius: 12px; padding: 6px 10px; display: grid; gap: 2px; }
+.today-head { font-size: 11px; font-weight: 650; color: var(--faint); text-transform: uppercase; letter-spacing: .04em; }
+.today-row { display: flex; align-items: center; gap: 8px; font-size: 12px; min-width: 0; }
+.today-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.st { flex: none; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 999px; }
+.st.rec { background: var(--rec-soft); color: var(--rec); }
+.st.work { background: var(--blue-soft); color: var(--blue); }
+.st.ready { background: var(--amber-soft); color: var(--amber); }
+.st.done { background: var(--surface); color: var(--muted); }
 .tpl { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); margin-top: -2px; min-width: 0; }
 .tpl .pick { flex: none; }
 .tpl .sub { flex: 1; min-width: 0; }
@@ -471,6 +480,7 @@ kbd { font: 600 10.5px system-ui, sans-serif; padding: 1px 5px; border-radius: 5
     guard = null;
     const chart = await readChart();
     let text = "", done = "Inserted into the chart. Check it before you sign.";
+    let sessionId = status && status.session ? status.session.id : "";
     if (chart && !force) {
       const r = await send({ fs: "call", path: "/api/note_for", body: { patient: chart } });
       if (!r.ok) return say(r.error, "warn");
@@ -482,6 +492,7 @@ kbd { font: 600 10.5px system-ui, sans-serif; padding: 1px 5px; border-radius: 5
       }
       if (!d.plain) return say(d.busy ? `${d.patient}'s note isn't ready yet (${d.busy}).` : `There's no note for ${d.patient} yet.`, "warn");
       text = d.plain;
+      sessionId = d.session_id || sessionId;
       if (d.match === "other") done = `Inserted ${d.patient}'s note (from an earlier FreeScribe session). Check it before you sign.`;
     } else {
       if (!noteText) {
@@ -494,6 +505,11 @@ kbd { font: 600 10.5px system-ui, sans-serif; padding: 1px 5px; border-radius: 5
     }
     if (!text) return say("There's no note yet.", "warn");
     const reply = await send({ fs: "insert", text });
+    if (reply.ok && reply.data.done && sessionId) {
+      // FreeScribe keeps a record of what went into which chart, and the list below shows it
+      const name = chart ? [chart.last_name, chart.first_name].filter(Boolean).join(", ") : "";
+      send({ fs: "call", path: "/api/inserted", body: { session_id: sessionId, chart: name } }).then(() => refresh());
+    }
     if (reply.ok && reply.data.done) say(done, chart || !(status && status.session && status.session.patient) ? "ok" : "warn", 9000);
     else say("Click in the chart's note box where the note should go, then press Insert again.", "warn", 7000);
   }
@@ -742,6 +758,16 @@ kbd { font: 600 10.5px system-ui, sans-serif; padding: 1px 5px; border-radius: 5
           <button class="ghost" data-do="copy" title="Copy the note">${ICON.copy}Copy</button></div>
           <div class="hint">Click in the chart's note box first, then Insert.</div></div>`;
       }
+    }
+    const notes = (status && status.notes) || [];
+    if (status && notes.some((n) => n.state !== "empty") && (notes.length > 1 || notes[0].id !== (status.session || {}).id)) {
+      const STATE = { recording: ["Recording", "rec"], writing: ["Writing…", "work"], ready: ["Not in chart yet", "ready"],
+                      inserted: ["In chart", "done"], empty: ["No note", "done"] };
+      body += `<div class="today"><div class="today-head">Today</div>${notes.map((n) => {
+        const [label, cls] = STATE[n.state] || STATE.empty;
+        return `<div class="today-row"><span class="today-name">${esc(n.name || "Untitled")}</span>
+          <span class="st ${cls}">${esc(n.state === "inserted" && n.inserted_at ? `In chart ${n.inserted_at}` : label)}</span></div>`;
+      }).join("")}</div>`;
     }
     if (message) body += `<div class="msg ${message.kind}">${esc(message.text)}</div>`;
 

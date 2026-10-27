@@ -119,6 +119,7 @@ class VisitControl:
             "question": s.question or None,
             "error": s.error or "",
             "template": s.template or None,
+            "notes": self.todays_notes(),
             "session": {
                 "id": s.session_id,
                 "title": s.title,
@@ -161,6 +162,41 @@ class VisitControl:
             raise ControlError("No session is open in FreeScribe.")
         return {"session_id": s.session_id, "title": s.title, "note": s.note, "plain": note_for_emr(s.note),
                 "busy": s.busy}
+
+    def todays_notes(self, limit: int = 6) -> list:
+        """
+        Today's sessions that belong to a patient or have a note, newest first, with where each
+        stands: "recording", "writing", "ready" (note written, not yet put into the chart),
+        "inserted" (put into the chart) or "empty". Lets the clinician see what is still waiting
+        after moving on to the next patient.
+        """
+        if not self._sessions:
+            return []
+        import datetime as _dt
+        today = _dt.date.today().isoformat()
+        out = []
+        for session in self._sessions():
+            day = str(session.get("created") or session.get("updated") or "")[:10]
+            patient = session.get("patient") or {}
+            note = (session.get("note") or "").strip()
+            if day != today or not (patient or note or session.get("recording")):
+                continue
+            if session.get("recording"):
+                state = "recording"
+            elif session.get("busy"):
+                state = "writing"
+            elif note and session.get("inserted_at"):
+                state = "inserted"
+            elif note:
+                state = "ready"
+            else:
+                state = "empty"
+            out.append({"id": session.get("id", ""), "state": state,
+                        "name": patient_details.display_name(patient) if patient else session.get("title", ""),
+                        "inserted_at": str(session.get("inserted_at") or "")[11:16]})
+            if len(out) >= limit:
+                break
+        return out
 
     def note_for(self, payload: dict) -> dict:
         """

@@ -305,3 +305,25 @@ def test_insert_only_takes_the_charts_own_note():
     assert r["match"] == "none"
     with pytest.raises(bc.ControlError):
         control.note_for({"patient": {}})
+
+
+def test_todays_notes_say_what_is_still_waiting():
+    import datetime as dt
+    today = dt.date.today().isoformat()
+    ann = {"first_name": "Ann", "last_name": "Lee"}
+    bob = {"first_name": "Bob", "last_name": "Ng"}
+    cy = {"first_name": "Cy", "last_name": "Diaz"}
+    sessions = [
+        {"id": "s4", "patient": cy, "note": "", "recording": True, "created": today + "T11:00"},
+        {"id": "s3", "patient": bob, "note": "", "busy": True, "created": today + "T10:40"},
+        {"id": "s2", "patient": ann, "note": "S: ...", "inserted_at": today + "T10:42:10", "created": today + "T10:10"},
+        {"id": "s1", "patient": {}, "note": "S: ...", "title": "Phone call", "created": today + "T09:00"},
+        {"id": "s0", "patient": ann, "note": "old", "created": "2020-01-01T09:00"},
+    ]
+    control = bc.VisitControl(state=lambda: bc.AppState(recording=True, paused=False), start=lambda: None,
+                              stop=lambda: None, pause=lambda: None, resume=lambda: None,
+                              add_context=lambda t: None, sessions=lambda: sessions)
+    notes = control.status()["notes"]
+    assert [(n["name"], n["state"]) for n in notes] == [
+        ("Diaz, Cy", "recording"), ("Ng, Bob", "writing"), ("Lee, Ann", "inserted"), ("Phone call", "ready")]
+    assert notes[2]["inserted_at"] == "10:42"

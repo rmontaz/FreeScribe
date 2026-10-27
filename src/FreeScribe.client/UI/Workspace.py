@@ -235,6 +235,8 @@ class SessionRow(tk.Canvas):
         subtitle = session.subtitle()
         if session.template and session.note.strip():
             subtitle += f"  ·  {session.template.replace(' - Default', '')}"
+        if session.inserted_at:
+            subtitle += "  ·  In chart " + session.inserted_at[11:16]
         self.itemconfigure(self._sub_item, text=_ellipsize(subtitle, self._sub_font, text_width),
                            fill=Palette.TEXT_MUTED if self._enabled else Palette.TEXT_FAINT)
         if self._hover:
@@ -992,6 +994,7 @@ class Workspace:
         self.transcript.set_text(session.transcript)
         self.note.set_text(session.note)
         self._rebuild_document_tabs()
+        self._restore_template(session)
         self._refresh_meta()
         self.hide_warning(kind="negatives")
         if self.chat_visible():
@@ -1715,6 +1718,7 @@ class Workspace:
 
     def _choose_template(self, name):
         if NoteStyleSelector.select_style(name):
+            self._remember_template(name)
             self._apply_note_mode()
             if hasattr(self, "start_screen") and self.start_screen.winfo_manager():
                 self.start_screen.refresh_templates()
@@ -1743,12 +1747,28 @@ class Workspace:
         if name != NoteStyleSelector.current_style:
             NoteStyleSelector.select_style(name)
             self._apply_note_mode()
-            if hasattr(self, "start_screen") and self.start_screen.winfo_manager():
-                self.start_screen.refresh_templates()
-            self._refresh_toolbar()
+        self._remember_template(name)
+        if hasattr(self, "start_screen") and self.start_screen.winfo_manager():
+            self.start_screen.refresh_templates()
+        self._refresh_toolbar()
         if make_default:
             NoteStyleSelector.set_default(name)
         return True
+
+    def _restore_template(self, session):
+        """A session keeps its own note template: opening it again brings that template back."""
+        name = session.template
+        if name and name != NoteStyleSelector.current_style and name in NoteStyleSelector.template_names():
+            NoteStyleSelector.select_style(name)
+            self._apply_note_mode()
+            if hasattr(self, "start_screen") and self.start_screen.winfo_manager():
+                self.start_screen.refresh_templates()
+
+    def _remember_template(self, name):
+        """The template chosen while a session is open is that session's (until its note is written with it)."""
+        if self.current is not None and self.current.template != name:
+            self.current.template = name
+            self._touch(self.current)
 
     def _make_default_template(self):
         name = NoteStyleSelector.current_style
@@ -1758,6 +1778,8 @@ class Workspace:
     def _start_with_default_template(self):
         """A new session starts with the default template."""
         NoteStyleSelector.use_default()
+        if self.current is not None and not self.current.note.strip():
+            self.current.template = NoteStyleSelector.current_style
         self._apply_note_mode()
 
     def _add_template(self):

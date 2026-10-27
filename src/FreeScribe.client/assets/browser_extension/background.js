@@ -247,6 +247,10 @@ chrome.commands.onCommand.addListener(async (command) => {
         return;
       }
       const result = await fsInsertIntoActiveTab(note.plain);
+      if (result.done && note.session_id) {
+        const name = chart ? fsPatientName(chart) : "";
+        fsCall("/api/inserted", { session_id: note.session_id, chart: name }).catch(() => {});
+      }
       if (!result.done) {
         notify("FreeScribe", "Click in the note box in your EMR first (where the note should go), then press the shortcut again.");
       }
