@@ -55,12 +55,14 @@ class ExtensionServer:
     :param get_routes: ``{"/api/name": function() -> dict}`` answered to GET
     :param post_routes: ``{"/api/name": function(payload) -> dict}`` answered to POST
     :param user_errors: exception classes whose message is shown in the extension as is
+    :param body_limits: ``{"/api/name": bytes}`` for POST routes allowed more than MAX_BODY
     """
 
     def __init__(self, port: int, code: Callable[[], str], get_routes: Dict[str, Callable[[], dict]],
                  post_routes: Dict[str, Callable[[dict], dict]], user_errors: tuple = (),
                  bound_origin: Optional[Callable[[], str]] = None,
-                 bind_origin: Optional[Callable[[str], None]] = None):
+                 bind_origin: Optional[Callable[[str], None]] = None,
+                 body_limits: Optional[Dict[str, int]] = None):
         self.requested_port = int(port)
         self.code = code
         self.get_routes = dict(get_routes)
@@ -70,6 +72,8 @@ class ExtensionServer:
         # code clears it): another extension in the same browser can't use the code
         self.bound_origin = bound_origin
         self.bind_origin = bind_origin
+        # Routes that take more than MAX_BODY (a form with its picture); every other request stays small
+        self.body_limits = dict(body_limits or {})
         self._httpd: Optional[ThreadingHTTPServer] = None
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
@@ -216,7 +220,7 @@ class _Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
             length = -1
-        if length < 0 or length > MAX_BODY:
+        if length < 0 or length > self.owner.body_limits.get(path, MAX_BODY):
             return self._error(HTTPStatus.BAD_REQUEST, "The request was too large.")
         try:
             payload = json.loads(self.rfile.read(length).decode("utf-8") or "{}") if length else {}

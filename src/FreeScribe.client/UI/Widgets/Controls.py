@@ -1230,9 +1230,16 @@ class Tooltip:
         widget.bind("<ButtonPress>", self._hide, add="+")
         widget.bind("<Destroy>", self._hide, add="+")
 
+    def _text(self):
+        """The hint; ``text`` may be a function, for hints that change (such as a shortcut)."""
+        try:
+            return self.text() if callable(self.text) else self.text
+        except Exception:
+            return ""
+
     def _schedule(self, event=None):
         self._cancel()
-        if self.text:
+        if self._text():
             self._job = self.widget.after(self.delay, self._show)
 
     def _cancel(self):
@@ -1254,7 +1261,7 @@ class Tooltip:
                 window.attributes("-topmost", True)
             except tk.TclError:
                 pass
-            label = tk.Label(window, text=self.text, bg=Palette.TOAST_BG, fg=Palette.TOAST_TEXT,
+            label = tk.Label(window, text=self._text(), bg=Palette.TOAST_BG, fg=Palette.TOAST_TEXT,
                              font=Theme.font("small"), padx=Theme.px(8), pady=Theme.px(4), justify="left")
             label.pack()
             window.update_idletasks()

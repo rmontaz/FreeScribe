@@ -23,6 +23,7 @@ import tkinter as tk
 from tkinter import messagebox
 import requests
 import logging
+import threading
 from typing import List, Any, Optional
 
 from UI.SettingsConstant import SettingsKeys, Architectures, FeatureToggle, DEFAULT_CONTEXT_WINDOW_SIZE
@@ -32,6 +33,21 @@ from utils.ip_utils import is_valid_url
 import multiprocessing
 import utils.whisper.Constants
 from utils.log_config import logger
+
+# Text the model box shows while it has no real model to offer. None of these is ever saved as the model.
+PLACEHOLDER_MODELS = {
+    "Loading models...", "Failed to load models", "No models available",
+    "Invalid LLM Endpoint", "No models found", "Select a Model", "Custom",
+}
+
+
+def is_local_model_name(name):
+    """A model file in the models folder (the local model), as opposed to a name a server offers."""
+    name = (name or "").strip().replace("\\", "/")
+    return name.startswith("./models/") or name.lower().endswith((".gguf", ".safetensors", ".bin"))
+
+
+MODEL_LIST_FAILURES = ("Failed to load models", "Invalid LLM Endpoint", "No models available")
 
 class SettingsWindow():
     """
@@ -155,6 +171,7 @@ class SettingsWindow():
             SettingsKeys.BROWSER_EXTENSION_CODE.value: "",
             SettingsKeys.BROWSER_EXTENSION_ORIGIN.value: "",
             SettingsKeys.CLINICIAN_PROFILE.value: {},
+            SettingsKeys.APP_SHORTCUTS.value: {},
         }
 
     def __init__(self):
@@ -399,6 +416,8 @@ class SettingsWindow():
 
         for setting, entry in self.editable_settings_entries.items():     
             value = entry.get()
+            if setting == SettingsKeys.LOCAL_LLM_MODEL.value and (not str(value).strip() or value in PLACEHOLDER_MODELS):
+                continue  # "Loading models..." and the like are not models: keep the saved one
             # Convert the value to the appropriate type based on the setting name
             self.editable_settings[setting] = self.convert_setting_value(setting, value)
 
@@ -531,25 +550,76 @@ class SettingsWindow():
             logger.exception("Failed to fetch models from endpoint")
             return ["Failed to load models", "Custom"]
 
+    def cancel_model_requests(self):
+        """Make any model list still being fetched land nowhere (e.g. after switching to the local model)."""
+        lock = self.__dict__.setdefault("_models_request_lock", threading.Lock())
+        with lock:
+            self._models_request_id = getattr(self, "_models_request_id", 0) + 1
+
     def update_models_dropdown(self, dropdown, endpoint=None):
         """
-        Updates the models dropdown with the available models.
+        Fetch the server's models (this runs on a worker thread), then fill the dropdown on the Tk thread.
 
-        This method fetches the available models from the AI Scribe service and updates
-        the dropdown widget in the settings window with the new list of models.
+        Each call gets a number; only the newest call's result is used, so overlapping refreshes can't
+        overwrite each other. The saved model stays selected: when the server can't be reached, or
+        doesn't list it, it is kept at the top of the list rather than replaced or hidden.
         """
         if self.editable_settings_entries[SettingsKeys.LOCAL_LLM.value].get():
             return
 
-        dropdown["values"] = ["Loading models...", "Custom"]
-        dropdown.set("Loading models...")
+        lock = self.__dict__.setdefault("_models_request_lock", threading.Lock())
+        with lock:
+            self._models_request_id = getattr(self, "_models_request_id", 0) + 1
+            request_id = self._models_request_id
+
+        saved_model = (self.editable_settings.get(SettingsKeys.LOCAL_LLM_MODEL.value) or "").strip()
+        if saved_model in PLACEHOLDER_MODELS or is_local_model_name(saved_model):
+            saved_model = ""  # nothing chosen yet, or the local model's file (just switched to a server)
+
+        def current():
+            try:
+                return (request_id == self._models_request_id
+                        and not self.editable_settings_entries[SettingsKeys.LOCAL_LLM.value].get()
+                        and bool(dropdown.winfo_exists()))
+            except tk.TclError:
+                return False  # the settings window was closed
+
+        def show_loading():
+            if current() and not saved_model:
+                dropdown["values"] = ["Loading models...", "Custom"]
+                dropdown.set("Loading models...")
+
+        try:
+            dropdown.after(0, show_loading)
+        except (tk.TclError, RuntimeError):
+            return  # settings window already closed
+
         models = self.get_available_models(endpoint=endpoint)
-        dropdown["values"] = models
-        if self.editable_settings[SettingsKeys.LOCAL_LLM_MODEL.value] in models:
-            dropdown.set(self.editable_settings[SettingsKeys.LOCAL_LLM_MODEL.value])
-        else:
-            dropdown.set(models[0])
-        
+        logger.info(f"Model list fetched (request {request_id}): {len(models) - 1} entries")
+
+        def apply_models():
+            if not current():
+                return  # a newer refresh (or a switch to the local model) superseded this one
+            values = list(models)
+            if saved_model and saved_model not in values:
+                if models[0] in MODEL_LIST_FAILURES:
+                    values = [saved_model, "Custom"]  # server not reachable now: keep what was chosen
+                else:
+                    logger.warning("The saved model is not in the server's list; keeping it selected")
+                    values.insert(0, saved_model)
+            dropdown["values"] = values
+            dropdown.set(saved_model or values[0])
+            try:
+                # Show or hide the custom-name box now that the list has arrived
+                dropdown.event_generate("<<ComboboxSelected>>")
+            except tk.TclError:
+                pass
+
+        try:
+            dropdown.after(0, apply_models)
+        except (tk.TclError, RuntimeError):
+            pass  # settings window closed while fetching
+
     def set_main_window(self, window):
         """
         Set the main window instance for the settings.

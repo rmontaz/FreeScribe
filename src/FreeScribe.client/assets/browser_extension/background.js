@@ -72,6 +72,65 @@ const panelActions = {
     if (!name) throw new FsError("No single patient is open on this page. Open the patient's chart first.", "refused");
     return { patient: name };
   },
+  // Dictation: type a piece where the cursor is (the box may be in any frame of the page)
+  async "dict-insert"(msg, tab) {
+    let probes;
+    try {
+      probes = await chrome.scripting.executeScript({ target: { tabId: tab.id, allFrames: true }, func: fsProbeFocus });
+    } catch (_error) {
+      return { done: false };
+    }
+    const fields = probes.filter((p) => p.result && p.result.field);
+    if (!fields.length) return { done: false };
+    fields.sort((a, b) => (b.result.focused - a.result.focused) || (b.result.at - a.result.at) ||
+      (b.result.big - a.result.big));
+    const [typed] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id, frameIds: [fields[0].frameId] }, func: fsDictInsert, args: [msg.text, msg.sid],
+    });
+    return Object.assign({ frameId: fields[0].frameId }, (typed && typed.result) || { done: false });
+  },
+  // Dictation: swap the typed text for the AI-tidied version (only where it is unchanged)
+  async "dict-replace"(msg, tab) {
+    const frames = [...new Set(msg.frameIds || [])];
+    if (frames.length !== 1) return { done: false, reason: frames.length ? "several" : "none" };
+    const [result] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id, frameIds: frames }, func: fsDictReplace, args: [msg.sid, msg.text],
+    });
+    return (result && result.result) || { done: false, reason: "changed" };
+  },
+  // Talking through a form: read the boxes of the form on this page (the frame with the most)
+  async "form-read"(_msg, tab) {
+    let found;
+    try {
+      found = await chrome.scripting.executeScript({ target: { tabId: tab.id, allFrames: true }, func: fsReadForm });
+    } catch (_error) {
+      return { count: 0 };
+    }
+    const best = found.filter((f) => f.result && f.result.count).sort((a, b) => b.result.count - a.result.count)[0];
+    return best ? Object.assign({ frameId: best.frameId }, best.result) : { count: 0 };
+  },
+  async "form-write"(msg, tab) {
+    const [result] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id, frameIds: [msg.frameId] }, func: fsWriteForm, args: [msg.values],
+    });
+    return (result && result.result) || { done: false, written: 0 };
+  },
+  // The keyboard shortcuts as Chrome has them now (the clinician may have changed them, and Chrome
+  // leaves one unset when another extension already uses its keys)
+  async shortcuts() {
+    const all = await chrome.commands.getAll();
+    return Object.fromEntries(all.filter((c) => c.name !== "_execute_action").map((c) => [c.name, c.shortcut || ""]));
+  },
+  async "open-shortcuts"() {
+    // Chrome's own page for changing an extension's shortcuts (an extension can't change them itself)
+    await fsOpenInFront("chrome://extensions/shortcuts", 900, 700);
+    return {};
+  },
+  // Load the extension's files again (FreeScribe keeps its folder up to date): the panel's "Update now"
+  async "self-reload"() {
+    setTimeout(() => chrome.runtime.reload(), 150);
+    return {};
+  },
   async options() {
     // OSCAR's chart is a pop-up window above the main Chrome window, so the settings open in
     // their own window in front of it (a tab would open behind the chart, out of sight)
@@ -149,8 +208,37 @@ chrome.commands.onCommand.addListener(async (command) => {
     } else if (command === "pause-resume") {
       const status = await fsStatus();
       await fsRecord(status.paused ? "resume" : "pause");
+    } else if (command === "dictate") {
+      // The floating panel on the page does the dictating (it types into the page as you talk)
+      const tab = await fsActiveTab();
+      let shown = false;
+      if (tab && /^https?:/.test(tab.url || "")) {
+        try {
+          const reply = await chrome.tabs.sendMessage(tab.id, { fs: "voice-toggle" }, { frameId: 0 });
+          shown = !!(reply && reply.ok);
+        } catch (_error) { shown = false; }
+      }
+      if (!shown) {
+        notify("FreeScribe", "Dictation works on pages where the FreeScribe panel is on. Click the FreeScribe button " +
+          "and switch on “Floating panel on this site”.");
+      }
     } else if (command === "insert-note") {
-      const note = await fsNote();
+      // Only the note of the patient whose chart is open here (as the panel's Insert does)
+      const tab = await fsActiveTab();
+      const chart = tab && /^https?:/.test(tab.url || "") ? await fsPatientFromTab(tab.id) : null;
+      let note;
+      if (chart) {
+        const found = await fsCall("/api/note_for", { patient: chart });
+        if (found.match === "none") {
+          // System notifications can show on the lock screen: no patient names in them
+          notify("FreeScribe", "Not inserted: this chart is a different patient from FreeScribe's note. " +
+            "Open the FreeScribe panel on the chart to see whose note it is.");
+          return;
+        }
+        note = found;
+      } else {
+        note = await fsNote();
+      }
       if (!note.plain) {
         notify("FreeScribe", note.busy ? `Not ready yet (${note.busy}).` : "This session has no note yet.");
         return;

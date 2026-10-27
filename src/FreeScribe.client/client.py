@@ -28,6 +28,7 @@ import logging
 from pathlib import Path
 import wave
 import threading
+import weakref
 import json
 import datetime
 import re
@@ -583,6 +584,10 @@ def threaded_toggle_recording(button=None, resume=False):
     workspace.compact_record.set_enabled(False)
     root.after(1000, lambda: (workspace.record_button.set_enabled(True), workspace.compact_record.set_enabled(True)))
 
+    if not is_recording and mic_busy_reason():
+        messagebox.showinfo("Microphone in use", mic_busy_reason())
+        return
+
     ready_flag = threaded_check_stt_model()
     # there is no point start recording if we are using local STT model and it's not ready
     # if user chooses to cancel the double check process, we need to return and not start recording
@@ -953,7 +958,7 @@ def realtime_text():
                         logger.info("File informaton")
                         logger.info(f"File Size: {len(buffer.getbuffer())} bytes")
 
-                        response = requests.post(app_settings.editable_settings[SettingsKeys.WHISPER_ENDPOINT.value], headers=headers,files=files, verify=verify, data=body)
+                        response = requests.post(app_settings.editable_settings[SettingsKeys.WHISPER_ENDPOINT.value], headers=headers,files=files, verify=verify, data=body, timeout=(10, 120))
                             
                         logger.info(f"Response from whisper with status code: {response.status_code}")
 
@@ -1372,7 +1377,8 @@ def send_audio_to_server():
 
                 # Send the request without verifying the SSL certificate
                 response = requests.post(
-                    app_settings.editable_settings[SettingsKeys.WHISPER_ENDPOINT.value], headers=headers, files=files, verify=verify, data=body)
+                    app_settings.editable_settings[SettingsKeys.WHISPER_ENDPOINT.value], headers=headers, files=files, verify=verify, data=body,
+                    timeout=(10, 900))  # a whole visit can take a slow server several minutes
 
                 logger.info(f"Response from whisper with status code: {response.status_code}")
 
@@ -1452,11 +1458,11 @@ def kill_thread(thread_id):
 
 
 def send_and_receive():
-    """Creates the note for the current session. Safe to call from any thread."""
-    root.after(0, start_note_generation)
+    """Creates the note for the current session (after a recording). Safe to call from any thread."""
+    root.after(0, lambda: start_note_generation(from_recording=True))
 
 
-def start_note_generation():
+def start_note_generation(from_recording=False):
     """Collects the transcript and context of the current session and starts note generation."""
     global user_message, generation_session_id
     workspace.flush_edits()
@@ -1466,6 +1472,10 @@ def start_note_generation():
         stop_flashing()
         workspace.show_tab("transcript")
         workspace.toast("There is no transcript to create a note from yet", icon_name="info")
+        if from_recording:
+            # Also shown in the browser extension, which would otherwise just stop "working"
+            workspace.show_warning("Nothing was transcribed, so no note was written. If you were speaking, check "
+                                   "the microphone (the level meter beside its name).", closable=True, kind="error")
         return
 
     user_message = transcript
@@ -1647,31 +1657,70 @@ def has_more_than_50_words(text: str) -> bool:
     return len(words) > 50
 
 
+# ------------------------------------------------------------ questions the extension can answer
+# A question shown in a pop-up that FreeScribe is waiting on. The browser extension shows it too
+# (status "question") and can answer it, so a clinician working in the EMR isn't left waiting.
+_question = {}
+_question_lock = threading.Lock()
+
+
+def current_question():
+    with _question_lock:
+        if not _question:
+            return None
+        return {"id": _question["id"], "text": _question["text"], "options": list(_question["options"])}
+
+
+def answer_question(question_id, option):
+    """Answers the waiting question with ``option`` (an option id). Returns False when it is no longer waiting."""
+    with _question_lock:
+        q = dict(_question) if _question and _question["id"] == question_id else None
+    if q is None or option not in {o["id"] for o in q["options"]}:
+        return False
+    run_on_ui(lambda: q["answer"](option))
+    return True
+
+
+def _ask_in_popup(title, text, options, answer_of):
+    """
+    A two-button pop-up (``options``: [(id, label), (id, label)]) that the extension can answer too.
+    Returns the chosen option id. ``answer_of`` maps a PopupBox response to an option id.
+    """
+    import uuid
+    question_id = uuid.uuid4().hex[:10]
+
+    def opened(popup):
+        def answer(option):
+            if popup.dialog.winfo_exists():
+                (popup.on_button_1 if option == options[0][0] else popup.on_button_2)()
+        with _question_lock:
+            _question.clear()
+            _question.update(id=question_id, text=text, options=[{"id": i, "label": l} for i, l in options],
+                             answer=answer)
+
+    try:
+        popup = PopupBox(parent=root, title=title, message=text, button_text_1=options[0][1],
+                         button_text_2=options[1][1], on_open=opened)
+    finally:
+        with _question_lock:
+            if _question.get("id") == question_id:
+                _question.clear()
+    return answer_of(popup.response)
+
+
 def display_screening_popup():
     """
-    Display a popup window to inform the user of invalid input and offer options.
+    The transcript looks too short or not like a visit: ask whether to write the note anyway.
 
-    :return: A boolean indicating the user's choice:
-             - False if the user clicks 'Cancel'.
-             - True if the user clicks 'Process Anyway!'.
+    :return: True to write the note anyway, False not to.
     """
-    # Create and display the popup window
-    popup_result = PopupBox(
-        parent=root,
-        title="Invalid Input",
-        message=(
-            "Input has been flagged as invalid. Please ensure the input is a conversation with more than "
-            "50 words between a doctor and a patient. Unexpected results may occur from the AI."
-        ),
-        button_text_1="Cancel",
-        button_text_2="Process Anyway!"
-    )
-
-    # Return based on the button the user clicks
-    if popup_result.response == "button_1":
-        return False
-    elif popup_result.response == "button_2":
-        return True
+    choice = _ask_in_popup(
+        "Write the note anyway?",
+        "This recording looks too short, or not like a conversation between a clinician and a patient "
+        "(under 50 words, or the AI did not recognise a visit). A note written from it may be wrong.",
+        [("cancel", "Don't write a note"), ("anyway", "Write the note anyway")],
+        lambda response: "anyway" if response == "button_2" else "cancel")
+    return choice == "anyway"
 
 
 def screen_input(user_message):
@@ -2272,7 +2321,7 @@ def _show_form_review(prepared, values, session_title, session_id=None, from_ses
                                       session_title=session_title, on_saved=on_saved,
                                       fill_path=prepared.fill_path, converted=prepared.converted,
                                       talk=FormTalk(prepared, form_title, session_id), from_session=from_session,
-                                      profile=(clinician_profile, save_clinician_profile))
+                                      profile=(clinician_profile, save_clinician_profile), voice=workspace.voice)
 
 
 def clinician_profile():
@@ -2287,8 +2336,9 @@ def save_clinician_profile(details):
     app_settings.save_settings_to_file()
 
 
-def transcribe_audio(audio):
-    """Transcribes in-memory audio (16 kHz float32) with the speech-to-text set in Settings."""
+def transcribe_audio(audio, keep_loaded=False):
+    """Transcribes in-memory audio (16 kHz float32) with the speech-to-text set in Settings.
+    ``keep_loaded``: in low-memory mode, leave the model loaded (live dictation sends many pieces)."""
     if app_settings.editable_settings[SettingsKeys.LOCAL_WHISPER.value]:
         low_memory = app_settings.is_low_mem_mode()
         if not is_whisper_valid() and low_memory:
@@ -2298,7 +2348,7 @@ def transcribe_audio(audio):
         try:
             text = transcribe_local(audio)
         finally:
-            if low_memory:
+            if low_memory and not keep_loaded:
                 unload_stt_model()
     else:
         settings = app_settings.editable_settings
@@ -2310,13 +2360,132 @@ def transcribe_audio(audio):
         body["initial_prompt"] = prompt
         files = {"audio": ("dictation.wav", to_wav_bytes(audio, RATE), "audio/wav")}
         response = requests.post(settings[SettingsKeys.WHISPER_ENDPOINT.value], headers=headers, files=files,
-                                 data=body, verify=not settings[SettingsKeys.S2T_SELF_SIGNED_CERT.value])
+                                 data=body, verify=not settings[SettingsKeys.S2T_SELF_SIGNED_CERT.value], timeout=(10, 120))
         if response.status_code != 200:
             raise RuntimeError(f"The speech-to-text server returned an error (HTTP {response.status_code}).")
         text = response.json().get("text", "")
     if app_settings.editable_settings[SettingsKeys.ENABLE_HALLUCINATION_CLEAN.value] and FeatureToggle.HALLUCINATION_CLEANING:
         text = hallucination_cleaner.clean_text(text)
     return (text or "").strip()
+
+
+# ------------------------------------------------------------ live dictation
+# Everything that is using the microphone besides the visit recording (objects with ``recording``)
+_mic_users = weakref.WeakSet()
+
+
+def mic_busy_reason():
+    """Why the microphone can't be used for something new right now ("" when it can)."""
+    if is_recording:
+        return "The microphone is in use for the visit recording. Stop recording first."
+    if any(getattr(user, "recording", False) for user in list(_mic_users)):
+        return "The microphone is in use for dictation. Stop dictating first."
+    return ""
+
+
+def new_live_dictation(on_piece=None):
+    """Dictation typed as you talk (services/live_dictation.py), with the app's microphone and speech-to-text."""
+    from services.live_dictation import LiveDictation
+    try:
+        threshold = float(app_settings.editable_settings[SettingsKeys.SILERO_SPEECH_THRESHOLD.value])
+    except (TypeError, ValueError):
+        threshold = app_settings.DEFAULT_SETTINGS_TABLE[SettingsKeys.SILERO_SPEECH_THRESHOLD.value]
+
+    def finished():
+        if app_settings.editable_settings[SettingsKeys.LOCAL_WHISPER.value] and app_settings.is_low_mem_mode() \
+                and not is_recording and not mic_busy_reason():
+            unload_stt_model()
+
+    dictation = LiveDictation(open_microphone_stream, lambda audio: transcribe_audio(audio, keep_loaded=True),
+                              is_silent=lambda samples: is_silent(samples, threshold), on_piece=on_piece,
+                              on_finished=finished)
+    _mic_users.add(dictation)
+    return dictation
+
+
+def tidy_dictation(text, done):
+    """
+    Asks the AI to tidy dictated ``text`` (punctuation, misheard words); calls ``done(reply or None, problem)``
+    from a worker thread. Names and numbers are hidden from the AI and put back afterwards.
+    """
+    from services.live_dictation import tidy_prompt
+    hidden, mapping = form_filler.pseudonymize(text)
+
+    def start(prompt_text):
+        def work():
+            try:
+                reply = send_text_to_chatgpt(tidy_prompt(prompt_text))
+            except Exception as e:
+                logger.exception(f"Tidying dictation failed: {e}")
+                done(None, f"The AI could not be reached: {e}")
+                return
+            if not reply or is_llm_error(reply):
+                done(None, describe_llm_error(reply) if reply else "The AI gave no text back.")
+                return
+            done(form_filler.restore(reply, mapping), "")
+        threading.Thread(target=work, daemon=True).start()
+
+    if needs_phi_review():
+        run_on_ui(lambda: ScrubWindow(root, hidden, start, lambda: done(None, "Not sent to the AI.")))
+    else:
+        start(hidden)
+
+
+def fill_web_form(payload, text, done):
+    """
+    Fills a form open in the EMR (the browser extension read its boxes) from what the clinician said
+    and the current session; calls ``done(values, labels, problems)`` from a worker thread.
+    """
+    from services import voice_forms
+    items = payload.get("fields") or []
+    title = str(payload.get("title") or "Form")[:200]
+    session = workspace.current
+
+    def fail(message):
+        done({}, {}, [message])
+
+    try:
+        fields = voice_forms.fields_from_page(items)
+    except voice_forms.VoiceFormError as e:
+        fail(str(e))
+        return
+
+    def prepare():
+        try:
+            voice_forms.labels_from_pictures(fields, items, payload.get("pictures") or [])
+        except Exception as e:
+            logger.warning(f"Labels could not be read from the form's picture: {type(e).__name__}")
+        source = form_filler.compose_source(
+            title=session.title if session else "", note=session.note if session else "",
+            context=session.context if session else "", transcript=session.transcript if session else "",
+            visit_date=session.created_at.date() if session else None, max_chars=form_source_budget(),
+            dictation=text, patient=patient_details.summary(session.patient) if session and session.patient else "")
+        if not text and not (session and (session.note or session.transcript)):
+            fail("Nothing to fill the form from: say what goes in the form, or record the visit first.")
+            return
+        hidden, mapping = form_filler.pseudonymize(source)
+
+        def start(prompt_source):
+            def work():
+                try:
+                    values, problems = voice_forms.fill(
+                        fields, lambda asked: _ask_form_values(asked, prompt_source, mapping, title),
+                        patient=dict(session.patient) if session and session.patient else None,
+                        profile=clinician_profile())
+                except Exception as e:
+                    logger.exception(f"Filling the web form failed: {e}")
+                    fail(f"The form could not be filled: {e}")
+                    return
+                done(values, {f.name: f.label for f in fields}, problems,
+                     {f.name: f.labels() for f in fields if f.kind in (form_filler.RADIO, form_filler.CHOICE)})
+            threading.Thread(target=work, daemon=True).start()
+
+        if needs_phi_review():
+            run_on_ui(lambda: ScrubWindow(root, hidden, start, lambda: fail("Not sent to the AI.")))
+        else:
+            start(hidden)
+
+    threading.Thread(target=prepare, daemon=True).start()
 
 
 class FormTalk:
@@ -2329,8 +2498,10 @@ class FormTalk:
         self.dictation = Dictation(open_microphone_stream, chunk=CHUNK, rate=RATE)
 
     def start(self):
-        if is_recording:
-            raise RuntimeError("The microphone is in use for the visit. Stop transcribing first.")
+        reason = mic_busy_reason()
+        if reason:
+            raise RuntimeError(reason)
+        _mic_users.add(self.dictation)
         self.dictation.start()
 
     def level(self):
@@ -2783,13 +2954,65 @@ def _extension_state():
         transcript=session.transcript if session else "", note=session.note if session else "",
         context=session.context if session else "", writes_note=not is_transcribe_only(),
         patient=dict(session.patient) if session else {},
-        seconds=workspace.recording_seconds() if session else 0.0)
+        seconds=workspace.recording_seconds() if session else 0.0,
+        question=current_question(),
+        template=_safe_template_state(),
+        error=(workspace.warning_text or "") if getattr(workspace, "warning_kind", None) == "error" else "")
+
+
+def _safe_template_state():
+    try:
+        return workspace.template_state()
+    except Exception:
+        return None
+
+
+def _extension_template(payload):
+    """The extension chooses the note template (also while recording: the note is written after Stop)."""
+    from services.browser_control import ControlError
+    name = str(payload.get("name", ""))
+    ok = run_on_ui_and_wait(lambda: workspace.choose_template(name, bool(payload.get("make_default"))))
+    if not ok:
+        raise ControlError("That template is not in FreeScribe any more.")
+    return {"ok": True, "template": workspace.template_state()}
+
+
+def _extension_attention(payload):
+    """The extension answers FreeScribe's waiting question, or dismisses the error it shows."""
+    from services.browser_control import ControlError
+    action = str(payload.get("action", ""))
+    if action == "answer":
+        if not answer_question(str(payload.get("id", "")), str(payload.get("option", ""))):
+            raise ControlError("That question was already answered in FreeScribe.", "gone")
+        return {"ok": True}
+    if action == "dismiss":
+        run_on_ui_and_wait(lambda: workspace.hide_warning(kind="error"))
+        return {"ok": True}
+    raise ControlError("Unknown request.")
 
 
 def _bind_extension_origin(origin):
     """Remembers the extension that paired (see ExtensionServer); saved with the settings."""
     app_settings.editable_settings[SettingsKeys.BROWSER_EXTENSION_ORIGIN.value] = origin
     _extension_settings_changed()
+
+
+def _extension_start_recording():
+    from services.browser_control import ControlError
+    reason = mic_busy_reason()
+    if reason:
+        raise ControlError(reason, "mic_busy")
+    run_on_ui(threaded_toggle_recording)
+
+
+def _extension_sessions():
+    """Every session, newest first, for finding the note of the chart open in the EMR."""
+    out = []
+    for session in sorted(list(session_store), key=lambda s: s.updated or "", reverse=True):
+        out.append({"id": session.id, "title": session.display_title, "note": session.note,
+                    "patient": dict(session.patient or {}), "updated": session.updated,
+                    "busy": session.id == generation_session_id and bool(workspace.busy_text)})
+    return out
 
 
 def _extension_new_session():
@@ -2829,9 +3052,11 @@ def start_extension_server():
         settings[SettingsKeys.BROWSER_EXTENSION_CODE.value] = new_code()
         _extension_settings_changed()
     if extension_server is None:
+        _refresh_extension_folder()
+        from services.extension_files import version_of
         control = VisitControl(
             state=_extension_state,
-            start=lambda: run_on_ui(threaded_toggle_recording),
+            start=_extension_start_recording,
             stop=lambda: run_on_ui(threaded_toggle_recording),
             pause=toggle_pause,
             resume=toggle_pause,
@@ -2839,13 +3064,21 @@ def start_extension_server():
             set_patient=lambda details: run_on_ui_and_wait(workspace.set_patient, details),
             clear_patient=lambda: run_on_ui_and_wait(workspace.clear_patient),
             new_session=_extension_new_session,
+            sessions=_extension_sessions,
+            extension_version=version_of(get_file_path('assets', 'browser_extension')),
             version=get_application_version())
+        from services.voice_control import VoiceControl, VoiceError
+        voice = VoiceControl(make_dictation=new_live_dictation, mic_busy=mic_busy_reason,
+                             tidy=tidy_dictation, fill_form=fill_web_form)
         extension_server = ExtensionServer(
             port, code=_extension_code,
             get_routes={"/api/status": control.status, "/api/note": control.note},
             post_routes={"/api/record": control.record, "/api/context": control.context,
-                         "/api/patient": control.patient, "/api/session": control.session},
-            user_errors=(ControlError,),
+                         "/api/patient": control.patient, "/api/session": control.session,
+                         "/api/dictate": voice.dictate, "/api/eform": voice.eform,
+                         "/api/attention": _extension_attention, "/api/note_for": control.note_for, "/api/template": _extension_template},
+            user_errors=(ControlError, VoiceError),
+            body_limits={"/api/eform": 25 * 1024 * 1024},
             bound_origin=lambda: str(settings.get(SettingsKeys.BROWSER_EXTENSION_ORIGIN.value) or ""),
             bind_origin=_bind_extension_origin)
     try:
@@ -2862,13 +3095,21 @@ def _extension_folder_for_chrome():
     A copy of the extension in the home folder, where Chrome's "Load unpacked" can find
     it (the installed app's own folder is hidden inside the app on a Mac).
     """
-    import shutil
-    source = get_file_path('assets', 'browser_extension')
-    target = os.path.join(os.path.expanduser("~"), "FreeScribe Chrome Extension")
-    if os.path.isdir(target):
-        shutil.rmtree(target, ignore_errors=True)
-    shutil.copytree(source, target)
+    from services import extension_files
+    target = extension_files.default_target()
+    extension_files.refresh(get_file_path('assets', 'browser_extension'), target, create=True)
     return target
+
+
+def _refresh_extension_folder():
+    """At start-up: bring the extension copy Chrome loads up to date with this FreeScribe (the panel then
+    offers Chrome's reload). Only when that copy exists, i.e. the extension was set up from it."""
+    from services import extension_files
+    try:
+        if extension_files.refresh(get_file_path('assets', 'browser_extension')):
+            logger.info("The Chrome extension folder was updated to this version of FreeScribe")
+    except OSError as e:
+        logger.warning(f"The Chrome extension folder could not be updated: {e}")
 
 
 def open_browser_extension():
@@ -2941,6 +3182,7 @@ workspace = Workspace(
         "help_guide": window.open_help_guide,
         "about": window.open_about,
         "third_party_notices": window.open_third_party_notices,
+        "keyboard_shortcuts": lambda: open_keyboard_shortcuts(),
         "debug_window": window.open_debug_window,
         "manage_recordings": window.open_recordings_manager,
         "manage_logs": window.open_log_window,
@@ -2960,11 +3202,33 @@ workspace.set_storage_mode(storing_notes_locally())
 if app_settings.editable_settings["Use Docker Status Bar"]:
     window.create_docker_status_bar()
 
-# Bind Alt+P to pause / resume
-root.bind('<Alt-p>', lambda event: toggle_pause())
+# Keyboard shortcuts (UI/Shortcuts.py): Alt+R start / stop, Alt+P pause, Alt+D dictate by default;
+# changed or turned off under Help > Keyboard shortcuts
+from UI import Shortcuts
 
-# Bind Alt+R to start / stop transcribing
-root.bind('<Alt-r>', lambda event: workspace.record_button.enabled and threaded_toggle_recording())
+
+def _shortcut_record():
+    if workspace.record_button.enabled:
+        threaded_toggle_recording()
+
+
+def open_keyboard_shortcuts():
+    from UI.ShortcutsWindow import ShortcutsWindow
+
+    def save(values):
+        app_settings.editable_settings[SettingsKeys.APP_SHORTCUTS.value] = dict(values)
+        app_settings.save_settings_to_file()
+        Shortcuts.apply(values)
+        workspace.shortcuts_changed()
+        workspace.toast("Keyboard shortcuts saved")
+
+    ShortcutsWindow(root, save)
+# Dictation typed at the cursor in the note area, the assistant bar and the form review (UI/VoiceTyping.py)
+from UI.VoiceTyping import VoiceTyping
+workspace.enable_dictation(VoiceTyping(root, new_live_dictation, mic_busy_reason))
+Shortcuts.install(root, {"record": _shortcut_record, "pause": toggle_pause, "dictate": workspace.toggle_dictation},
+                  app_settings.editable_settings.get(SettingsKeys.APP_SHORTCUTS.value) or {})
+workspace.shortcuts_changed()
 
 # Window size: the last one used if it still fits this screen, otherwise the default
 root.minsize(Theme.px(Workspace.MIN_SIZE[0]), Theme.px(Workspace.MIN_SIZE[1]))

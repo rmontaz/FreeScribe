@@ -24,7 +24,8 @@ class PopupBox:
                  button_text_3=None,
                  delete_window_button_action=1,
                  button_1_callback=None, 
-                 button_2_callback=None):
+                 button_2_callback=None,
+                 on_open=None):
         """
         Initialize the PopupBox instance and create the dialog window.
 
@@ -101,6 +102,8 @@ class PopupBox:
         # Configure the dialog as a modal window
         self.dialog.transient(parent)
         self.dialog.grab_set()
+        if on_open is not None:
+            on_open(self)       # e.g. so the question can also be answered from elsewhere
         parent.wait_window(self.dialog)
 
     def on_button_1(self):

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "FreeScribe for OSCAR",
-  "version": "1.2.0",
-  "description": "Control FreeScribe during a visit and put the finished note into OSCAR with one click, from a floating panel that also works in OSCAR's pop-up chart windows. Talks only to FreeScribe on this computer.",
+  "version": "1.5.0",
+  "description": "Control FreeScribe during a visit, dictate into the chart and its forms, and put the finished note into OSCAR with one click, from a floating panel that also works in OSCAR's pop-up chart windows. Talks only to FreeScribe on this computer.",
   "icons": {
     "16": "icons/icon16.png",
     "32": "icons/icon32.png",
@@ -49,6 +49,12 @@
         "default": "Alt+Shift+P"
       },
       "description": "Pause or resume the recording"
+    },
+    "dictate": {
+      "suggested_key": {
+        "default": "Alt+Shift+D"
+      },
+      "description": "Dictate into the chart where the cursor is (press again to stop)"
     },
     "insert-note": {
       "suggested_key": {

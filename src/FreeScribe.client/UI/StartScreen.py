@@ -13,6 +13,7 @@ import tkinter as tk
 
 from UI.Icons import icon
 from UI.Theme import Theme, Palette
+from UI import Shortcuts
 from UI.Widgets.Controls import Button, LevelMeter, RoundedFrame, Tooltip, rounded_image
 
 # Short descriptions for the built-in templates on the start screen
@@ -50,7 +51,7 @@ class BigRecordButton(tk.Canvas):
         self.bind("<Button-1>", lambda e: self.invoke())
         self.bind("<Key-Return>", lambda e: self.invoke())
         self.bind("<Key-space>", lambda e: self.invoke())
-        Tooltip(self, Theme.keys("Start transcribing (Alt+R)"))
+        Tooltip(self, lambda: Shortcuts.hint("Start transcribing", "record"))
         self._render()
 
     def invoke(self):
@@ -157,7 +158,7 @@ class StartScreen(tk.Frame):
         self.title = tk.Label(column, text="Start transcribing", bg=Palette.BG, fg=Palette.TEXT,
                               font=Theme.font("title", "semibold"))
         self.title.pack(pady=(Theme.px(14), Theme.px(2)))
-        self.subtitle = tk.Label(column, text=Theme.keys("Press Alt+R any time. The note is written when you stop."),
+        self.subtitle = tk.Label(column, text=self._subtitle_text(),
                                  bg=Palette.BG, fg=Palette.TEXT_MUTED, font=Theme.font("base"))
         self.subtitle.pack()
 
@@ -202,13 +203,29 @@ class StartScreen(tk.Frame):
         self.context_button = Button(others, text="Add context first", icon_name="clipboard", variant="neutral",
                                      size="sm", command=lambda: self._do("context"))
         self.context_button.pack(side="left")
+        # Dictate the note yourself (shown once the app has dictation, see show_dictate)
+        self.dictate_button = Button(others, text="Dictate a note", icon_name="mic", variant="neutral",
+                                     size="sm", command=lambda: self._do("dictate"),
+                                     tooltip=lambda: Shortcuts.hint("Type what you say into the note", "dictate"))
 
         self.refresh_templates()
+
+    def show_dictate(self):
+        self.dictate_button.pack(side="left", padx=(Theme.px(6), 0))
 
     def _do(self, name, *args):
         action = self.actions.get(name)
         if callable(action):
             action(*args)
+
+    @staticmethod
+    def _subtitle_text():
+        key = Shortcuts.label(Shortcuts.key_of("record"))
+        return f"Press {key} any time. The note is written when you stop." if key \
+            else "The note is written when you stop."
+
+    def shortcuts_changed(self):
+        self.subtitle.configure(text=self._subtitle_text())
 
     def _on_resize(self, event):
         width = min(Theme.px(680), max(Theme.px(420), event.width - Theme.px(64)))
@@ -258,7 +275,7 @@ class StartScreen(tk.Frame):
 
     def set_enabled(self, enabled):
         self.record_button.set_enabled(enabled)
-        for button in (self.upload_button, self.paste_button, self.context_button):
+        for button in (self.upload_button, self.paste_button, self.context_button, self.dictate_button):
             button.set_enabled(enabled)
 
 
@@ -284,10 +301,10 @@ class RecordingBanner(tk.Frame):
                                    font=Theme.font("display", "semibold"))
         self.time_label.pack(fill="x")
         self.stop_button = Button(body, text="Stop and write note", icon_name="stop", variant="danger", size="lg",
-                                  surface=bg, command=on_stop, tooltip=Theme.keys("Stop transcribing (Alt+R)"))
+                                  surface=bg, command=on_stop, tooltip=lambda: Shortcuts.hint("Stop transcribing", "record"))
         self.stop_button.pack(side="right")
         self.pause_button = Button(body, text="Pause", icon_name="pause", variant="secondary", size="lg",
-                                   surface=bg, command=on_pause, tooltip=Theme.keys("Pause or resume (Alt+P)"))
+                                   surface=bg, command=on_pause, tooltip=lambda: Shortcuts.hint("Pause or resume", "pause"))
         self.pause_button.pack(side="right", padx=(0, Theme.px(8)))
         self.meter = LevelMeter(body, bars=22, height=40, surface=bg)
         self.meter.pack(side="left", padx=Theme.px(24))

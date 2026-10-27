@@ -271,7 +271,7 @@ $("settings").addEventListener("click", () => chrome.runtime.openOptionsPage());
 
 chrome.commands.getAll((commands) => {
   const keys = commands.filter((c) => c.shortcut && c.name !== "_execute_action")
-    .map((c) => `${c.shortcut} ${{ "toggle-recording": "start/stop", "pause-resume": "pause", "insert-note": "insert note" }[c.name] || c.name}`);
+    .map((c) => `${c.shortcut} ${{ "toggle-recording": "start/stop", "pause-resume": "pause", "insert-note": "insert note", dictate: "dictate" }[c.name] || c.name}`);
   $("keys").textContent = keys.length ? "Shortcuts: " + keys.join(" · ") : "Set keyboard shortcuts in chrome://extensions/shortcuts";
 });
 

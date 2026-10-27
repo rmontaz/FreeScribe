@@ -31,7 +31,7 @@ from services.whisper_hallucination_cleaner import load_hallucination_cleaner_mo
 from utils.file_utils import get_file_path, get_resource_path
 from utils.utils import get_application_version
 from UI.MarkdownWindow import MarkdownWindow
-from UI.SettingsWindow import SettingsWindow
+from UI.SettingsWindow import SettingsWindow, PLACEHOLDER_MODELS, is_local_model_name
 from UI.SettingsConstant import SettingsKeys, Architectures, FeatureToggle
 from UI.Widgets.PopupBox import PopupBox
 from UI.Theme import Theme, Palette
@@ -456,8 +456,13 @@ class SettingsWindowUI:
 
         # 5. Models (Left Column)
         tk.Label(left_frame, text=SettingsKeys.LOCAL_LLM_MODEL.value).grid(row=left_row, column=0, padx=0, pady=5, sticky="w")
-        models_drop_down_options = []
-        models_drop_down_options = self._get_local_model_options()
+        current_model = self.settings.editable_settings[SettingsKeys.LOCAL_LLM_MODEL.value]
+        if self.settings.editable_settings_entries[SettingsKeys.LOCAL_LLM.value].get():
+            models_drop_down_options = self._get_local_model_options()
+        else:
+            # A server's model is never a local file: start with the saved one, the server's list follows
+            seed = "" if is_local_model_name(current_model) else current_model
+            models_drop_down_options = [seed, "Custom"] if seed else ["Loading models...", "Custom"]
         self.models_drop_down = ttk.Combobox(left_frame, values=models_drop_down_options, state="readonly")
         self.models_drop_down.grid(row=left_row, column=1, padx=0, pady=5, sticky="ew")
         self.models_drop_down.bind('<<ComboboxSelected>>', self.on_model_selection_change)
@@ -469,13 +474,15 @@ class SettingsWindowUI:
         current_model = self.settings.editable_settings[SettingsKeys.LOCAL_LLM_MODEL.value]
         if current_model in models_drop_down_options:
             self.models_drop_down.current(models_drop_down_options.index(current_model))
+        elif not self.settings.editable_settings_entries[SettingsKeys.LOCAL_LLM.value].get():
+            self.models_drop_down.set(models_drop_down_options[0])  # "Loading models..." until the list arrives
         else:
             # If current model is not in the list, show custom entry
             self.models_drop_down.set("Custom")
             self._show_custom_model_entry(left_row)
         
         # Start background thread to update with remote models if needed
-        thread = threading.Thread(target=self.settings.update_models_dropdown, args=(self.models_drop_down,))
+        thread = threading.Thread(target=self.settings.update_models_dropdown, args=(self.models_drop_down,), daemon=True)
         thread.start()
 
         # A drawn icon rather than a "↻" glyph, which not every system font includes
@@ -537,7 +544,14 @@ class SettingsWindowUI:
         self.architecture_dropdown.config(state=inverted_state)
         
         #flag used for determining if window was just opened so we dont spam the API.
-        if not self.settings_opened:
+        if not self.settings_opened and current_state:
+            # Switched to the local model: drop any server list still on its way and show the local files
+            self.settings.cancel_model_requests()
+            options = self._get_local_model_options()
+            self.models_drop_down["values"] = options
+            saved = self.settings.editable_settings[SettingsKeys.LOCAL_LLM_MODEL.value]
+            self.models_drop_down.set(saved if saved in options else options[0])
+        elif not self.settings_opened:
             threading.Thread(target=self.settings.update_models_dropdown, args=(self.models_drop_down,self.settings.editable_settings_entries[SettingsKeys.LLM_ENDPOINT.value].get(),)).start()
         else:
             self.settings_opened = False
@@ -601,10 +615,14 @@ class SettingsWindowUI:
         self.settings.editable_settings_entries[SettingsKeys.LOCAL_LLM_MODEL.value] = self.models_drop_down
 
     def get_selected_model(self):
-        """Returns the selected model, either from dropdown or custom entry"""
-        if self.models_drop_down.get() in ["Custom", "Select a Model"]:
-            return self.custom_model_entry.get()
-        return self.models_drop_down.get()
+        """Returns the selected model, either from dropdown or custom entry.
+        Never a placeholder such as "Loading models...": then the saved model is returned."""
+        value = self.models_drop_down.get()
+        if value in ("Custom", "Select a Model"):
+            value = self.custom_model_entry.get().strip()
+        if not value or value in PLACEHOLDER_MODELS:
+            return self.settings.editable_settings[SettingsKeys.LOCAL_LLM_MODEL.value]
+        return value
 
     def _get_local_model_options(self):
         root = Path.cwd() / "models"
@@ -923,8 +941,7 @@ pady=5, sticky="w")
         self.__initialize_file_logger()
         self.__initialize_notes_history()
 
-        if self.get_selected_model() not in ["Loading models...", "Failed to load models"]:
-            self.settings.editable_settings[SettingsKeys.LOCAL_LLM_MODEL.value] = self.get_selected_model()
+        self.settings.editable_settings[SettingsKeys.LOCAL_LLM_MODEL.value] = self.get_selected_model()
 
         # delay update, or the update thread might be reading old settings value
         update_whisper_model_flag = self.settings.update_whisper_model()
@@ -1017,8 +1034,8 @@ pady=5, sticky="w")
             
         else:
             self.save_settings(False)
-            threading.Thread(target=self.settings.update_models_dropdown, args=(self.models_drop_down,)).start()
-            self.on_model_selection_change(None)
+            self._hide_custom_model_entry()  # bring the list back; the saved model stays selected in it
+            threading.Thread(target=self.settings.update_models_dropdown, args=(self.models_drop_down,), daemon=True).start()
 
     def __initialize_notes_history(self):
         """

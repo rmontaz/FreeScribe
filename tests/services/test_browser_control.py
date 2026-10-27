@@ -259,3 +259,49 @@ def test_only_the_paired_extension_is_let_in():
         assert ask("chrome-extension://someotherextension") == 200
     finally:
         server.stop()
+
+
+def test_a_waiting_question_and_an_error_reach_the_extension():
+    question = {"id": "q1", "text": "Write the note anyway?",
+                "options": [{"id": "cancel", "label": "Don't"}, {"id": "anyway", "label": "Write it"}]}
+    state = bc.AppState(recording=False, paused=False, busy="Creating note", session_id="s", question=question)
+    control = bc.VisitControl(state=lambda: state, start=lambda: None, stop=lambda: None, pause=lambda: None,
+                              resume=lambda: None, add_context=lambda t: None)
+    s = control.status()
+    assert s["phase"] == "question" and s["question"]["options"][1]["id"] == "anyway"
+    state.question, state.busy, state.error = None, "", "Nothing was transcribed."
+    s = control.status()
+    assert s["phase"] == "idle" and s["error"] == "Nothing was transcribed." and s["question"] is None
+
+
+def test_the_note_template_reaches_the_extension():
+    template = {"current": "SOAP Note - Default", "default": "History & Physical",
+                "options": ["SOAP Note - Default", "History & Physical"]}
+    state = bc.AppState(recording=True, paused=False, session_id="s", template=template)
+    control = bc.VisitControl(state=lambda: state, start=lambda: None, stop=lambda: None, pause=lambda: None,
+                              resume=lambda: None, add_context=lambda t: None)
+    assert control.status()["template"] == template
+
+
+def test_insert_only_takes_the_charts_own_note():
+    ann = {"first_name": "Ann", "last_name": "Lee", "dob": "1980-02-03"}
+    bob = {"first_name": "Bob", "last_name": "Ng", "dob": "1975-05-06"}
+    state = bc.AppState(recording=True, paused=False, session_id="s2", title="Ng, Bob", patient=bob, note="")
+    sessions = [{"id": "s2", "title": "Ng, Bob", "note": "", "patient": bob, "updated": "2026-10-27T10:30"},
+                {"id": "s1", "title": "Lee, Ann", "note": "S: back pain", "patient": ann, "updated": "2026-10-27T10:10"}]
+    control = bc.VisitControl(state=lambda: state, start=lambda: None, stop=lambda: None, pause=lambda: None,
+                              resume=lambda: None, add_context=lambda t: None, sessions=lambda: sessions)
+    # Back in Ann's chart while Bob is being recorded: Ann's note from the earlier session
+    r = control.note_for({"patient": dict(ann)})
+    assert r["match"] == "other" and r["plain"] == "S: back pain" and r["patient"] == "Lee, Ann"
+    # Bob's chart: the open session, which has no note yet
+    r = control.note_for({"patient": dict(bob)})
+    assert r["match"] == "current" and r["plain"] == ""
+    # Someone else's chart: nothing to insert, and it says whose the open session is
+    r = control.note_for({"patient": {"first_name": "Cy", "last_name": "Diaz", "dob": "1990-01-01"}})
+    assert r["match"] == "none" and r["chart"] == "Diaz, Cy" and r["session_patient"] == "Ng, Bob"
+    # Same name, different date of birth: not the same patient
+    r = control.note_for({"patient": {"first_name": "Ann", "last_name": "Lee", "dob": "1999-09-09"}})
+    assert r["match"] == "none"
+    with pytest.raises(bc.ControlError):
+        control.note_for({"patient": {}})

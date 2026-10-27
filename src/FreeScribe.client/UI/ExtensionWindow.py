@@ -27,7 +27,10 @@ STEPS = (
 )
 USE = ("During a visit, use the floating panel (or Alt+Shift+R) to start, pause and stop. Drag it "
        "anywhere, stick it to a side, or shrink it to a small button. When the note is ready, click "
-       "in the OSCAR note box and press “Insert into chart” (or Alt+Shift+N).")
+       "in the OSCAR note box and press “Insert into chart” (or Alt+Shift+N). To dictate, click in any "
+       "box in the chart and press the panel’s dictate button (or Alt+Shift+D); to fill an eForm by "
+       "talking, open it and choose “Fill this form by talking” in the panel’s … menu. These are the "
+       "default keys; change them with “Change keyboard shortcuts” in the panel’s … menu.")
 
 
 class ExtensionWindow:

@@ -43,6 +43,7 @@ class SettingsKeys(Enum):
     BROWSER_EXTENSION_CODE = "Browser Extension Code"
     BROWSER_EXTENSION_ORIGIN = "Browser Extension Origin"
     CLINICIAN_PROFILE = "Clinician Profile"
+    APP_SHORTCUTS = "App Shortcuts"
 
 class Architectures(Enum):
     CPU = ("CPU", "cpu")

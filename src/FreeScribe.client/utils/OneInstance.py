@@ -90,7 +90,7 @@ class OneInstance:
                                 == os.path.basename(sys.executable)
                             )
                         )
-                        and client_script in info["cmdline"]
+                        and self._runs_client(proc, info["cmdline"], client_script)
                     )
                 )
 
@@ -104,6 +104,26 @@ class OneInstance:
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
         return possible_ids
+
+    @staticmethod
+    def _runs_client(proc, cmdline, client_script):
+        """Whether ``cmdline`` runs this client.py: by full path, or as "client.py" started from its folder
+        (the Mac launcher runs ``python client.py``)."""
+        for arg in cmdline[1:]:
+            if not arg.endswith("client.py"):
+                continue
+            if os.path.isabs(arg):
+                if os.path.normcase(os.path.realpath(arg)) == os.path.normcase(os.path.realpath(client_script)):
+                    return True
+                continue
+            try:
+                cwd = proc.cwd()
+            except (psutil.AccessDenied, psutil.NoSuchProcess, OSError):
+                continue
+            if os.path.normcase(os.path.realpath(os.path.join(cwd, arg))) == \
+                    os.path.normcase(os.path.realpath(client_script)):
+                return True
+        return False
 
     def kill_instance(self, pid):
         """
@@ -230,14 +250,22 @@ class OneInstance:
         if is_windows():
             if self.get_running_instance_pids():
                 return self.show_instance_dialog()
-        elif is_linux():
-            self.lock_file, already_running = linux_check_instance()
+        elif is_linux() or is_macos():
+            check = linux_check_instance if is_linux() else macos_check_instance
+            self.lock_file, already_running = check()
             if already_running:
-                return self.show_instance_dialog()
-        elif is_macos():
-            self.lock_file, already_running = macos_check_instance()
-            if already_running:
-                return self.show_instance_dialog()
+                if self.get_running_instance_pids():
+                    return self.show_instance_dialog()
+                # The lock is held (only a running FreeScribe holds it) but its process could not be
+                # identified: never start a second copy, which would fight the first for the
+                # microphone and the browser extension's connection
+                self.bring_to_front(self.app_name)
+                note = tk.Tk()
+                note.withdraw()
+                messagebox.showinfo("FreeScribe", "FreeScribe is already open. Use the window that is open, "
+                                    "or quit it first to start it again.", parent=note)
+                note.destroy()
+                return True
 
         return False
 

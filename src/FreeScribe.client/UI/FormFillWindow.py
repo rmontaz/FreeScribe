@@ -43,10 +43,11 @@ class FormFillWindow:
     :param from_session: True when ``values`` came from the session (False: the form opened blank)
     :param profile: optional (get, save) pair for the clinician's saved details; when given the
         window offers "Your details…" and fills the clinician boxes from them
+    :param voice: optional UI.VoiceTyping; when given each text field has a microphone to dictate into it
     """
 
     def __init__(self, parent, pdf_path, fields, values, session_title="", on_saved=None,
-                 fill_path=None, converted=False, talk=None, from_session=True, profile=None):
+                 fill_path=None, converted=False, talk=None, from_session=True, profile=None, voice=None):
         self.parent = parent
         self.pdf_path = pdf_path
         self.fill_path = fill_path or pdf_path
@@ -61,6 +62,7 @@ class FormFillWindow:
         self.from_session = from_session
         self.talk_panel = None
         self.profile = profile
+        self.voice = voice
 
         self.window = tk.Toplevel(parent)
         self.window.title("Fill PDF form")
@@ -128,7 +130,7 @@ class FormFillWindow:
         for index, field in enumerate(self.fields):
             self.rows.append(_FieldRow(self.scroll.body, index, field, self._initial_value(field),
                                        ai_filled=bool(self.values.get(field.name)) and field.needs_answer,
-                                       show_page=pages, on_change=self._update_count))
+                                       show_page=pages, on_change=self._update_count, voice=self.voice))
 
         # The footer is packed ahead of the field list so a long form never pushes Save out of the window
         footer = tk.Frame(self.window, bg=Palette.BG)
@@ -255,6 +257,12 @@ class FormFillWindow:
     def close(self):
         if self.talk_panel is not None:
             self.talk_panel.cancel()
+        if self.voice is not None and self.voice.active:
+            try:
+                if self.voice.widget.winfo_toplevel() is self.window:
+                    self.voice.cancel()
+            except tk.TclError:
+                pass
         if self.window.winfo_exists():
             self.window.destroy()
 
@@ -421,9 +429,11 @@ class TalkPanel:
 class _FieldRow:
     """Label, editor and status mark for one field, laid out on two grid rows."""
 
-    def __init__(self, parent, index, field, value, ai_filled, show_page, on_change):
+    def __init__(self, parent, index, field, value, ai_filled, show_page, on_change, voice=None):
         self.field = field
         self.on_change = on_change
+        self.voice = voice
+        self.mic = None
         self.ai_filled = ai_filled
         self.widgets = []
 
@@ -448,6 +458,7 @@ class _FieldRow:
             box.pack(fill="x")
             box.bind("<<ComboboxSelected>>", lambda e: self._changed())
         elif field.multiline:
+            self._add_mic(frame)
             border = tk.Frame(frame, bg=Palette.BORDER_STRONG, padx=1, pady=1)
             border.pack(fill="x")
             self.text = tk.Text(border, height=4, wrap="word", relief="flat", bd=0, font=Theme.font("base"),
@@ -460,6 +471,7 @@ class _FieldRow:
             self.var = None
         else:
             self.var = tk.StringVar(value=value)
+            self._add_mic(frame)
             border = tk.Frame(frame, bg=Palette.BORDER_STRONG, padx=1, pady=1)
             border.pack(fill="x")
             inner = tk.Frame(border, bg=Palette.BG)
@@ -467,7 +479,39 @@ class _FieldRow:
             entry = tk.Entry(inner, textvariable=self.var, relief="flat", bd=0, font=Theme.font("base"),
                              bg=Palette.BG, fg=Palette.TEXT, insertbackground=Palette.TEXT, highlightthickness=0)
             entry.pack(fill="x", ipady=Theme.px(5), padx=Theme.px(8))
+            self.entry = entry
             self.var.trace_add("write", lambda *a: self._changed())
+
+    def _add_mic(self, frame):
+        """A microphone beside the box: what you say is typed into it as you talk."""
+        if self.voice is None:
+            return
+        self.mic = Button(frame, icon_name="mic", variant="ghost", size="xs", command=self._dictate,
+                          tooltip="Dictate into this box (press again to stop)")
+        self.mic.pack(side="right", anchor="n", padx=(Theme.px(4), 0))
+
+    def _dictate(self):
+        widget = getattr(self, "text", None) if self.field.multiline else getattr(self, "entry", None)
+        if widget is None:
+            return
+        if self.voice.is_typing_into(widget):
+            self.voice.stop()
+            return
+        widget.focus_set()
+        if self.field.multiline:
+            widget.mark_set("insert", "end-1c")
+        else:
+            widget.icursor("end")
+
+        def state(value):
+            if self.mic is not None and self.mic.winfo_exists():
+                busy = value in ("listening", "finishing")
+                self.mic.set(icon_name="stop" if busy else "mic", variant="danger-ghost" if busy else "ghost")
+
+        problem = self.voice.start(widget, on_state=state)
+        if problem:
+            from tkinter import messagebox
+            messagebox.showinfo("Dictation", problem, parent=widget.winfo_toplevel())
 
     def _text_modified(self, _event=None):
         if self.text.edit_modified():

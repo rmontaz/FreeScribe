@@ -28,6 +28,7 @@ from UI.Icons import icon, logo
 from UI.NoteStyleSelector import NoteStyleSelector
 from UI.StartScreen import RecordingBanner, StartScreen
 from UI.Theme import Palette, Theme
+from UI import Shortcuts
 from UI.Widgets.Controls import (Button, Chip, LevelMeter, PlaceholderEntry, RoundedFrame, ScrollFrame,
                                  Tabs, TextArea, Toast, Tooltip, popup_menu, rounded_image)
 from services import export as exporter
@@ -505,10 +506,10 @@ class Workspace:
         self.record_menu_button.pack(side="right", padx=(Theme.px(2), 0))
         self.record_button = Button(right, text="Start transcribing", icon_name="mic", variant="primary", size="lg",
                                     command=lambda: self._act("toggle_recording"),
-                                    tooltip=Theme.keys("Start or stop transcribing (Alt+R)"))
+                                    tooltip=lambda: Shortcuts.hint("Start or stop transcribing", "record"))
         self.record_button.pack(side="right")
         self.pause_button = Button(right, text="Pause", icon_name="pause", variant="secondary", size="lg",
-                                   command=lambda: self._act("toggle_pause"), tooltip=Theme.keys("Pause or resume (Alt+P)"))
+                                   command=lambda: self._act("toggle_pause"), tooltip=lambda: Shortcuts.hint("Pause or resume", "pause"))
 
         left = tk.Frame(self.header, bg=bg)
         left.pack(side="left", fill="x", expand=True)
@@ -572,13 +573,17 @@ class Workspace:
                                       command=self._open_template_menu, tooltip="Note template and level of detail")
         self.more_button = Button(actions, icon_name="dots", variant="ghost-strong", size="sm", surface=bg,
                                   command=self._open_more_menu, tooltip="Copy or export")
+        self.dictate_button = Button(actions, text="Dictate", icon_name="mic", variant="ghost-strong", size="sm",
+                                     surface=bg, command=self.toggle_dictation,
+                                     tooltip=lambda: Shortcuts.hint("Type what you say at the cursor", "dictate"))
+        self.voice = None        # VoiceTyping, set by the app when dictation is available
         self._toolbar_level = 0
         self._layout_actions()
         self.tabs.bind("<Configure>", lambda e: self._fit_toolbar())
 
     def _layout_actions(self):
         for button in (self.export_button, self.copy_button, self.more_button, self.generate_button,
-                       self.template_button):
+                       self.template_button, self.dictate_button):
             button.pack_forget()
         pad = dict(pady=Theme.px(3))
         if self._toolbar_level >= 3:
@@ -587,6 +592,8 @@ class Workspace:
         else:
             self.export_button.pack(side="right", **pad)
             self.copy_button.pack(side="right", padx=(0, Theme.px(2)), **pad)
+        if self.voice is not None:
+            self.dictate_button.pack(side="right", padx=(0, Theme.px(2)), **pad)
         for button in self._note_buttons():
             button.pack(side="right", padx=(0, Theme.px(8 if button is self.generate_button else 6)), **pad)
 
@@ -599,9 +606,10 @@ class Workspace:
         return [self.generate_button, self.template_button]
 
     def _toolbar_buttons(self):
+        dictate = [self.dictate_button] if self.voice is not None else []
         if self._toolbar_level >= 3:
-            return [self.more_button] + self._note_buttons()
-        return [self.export_button, self.copy_button] + self._note_buttons()
+            return [self.more_button] + dictate + self._note_buttons()
+        return [self.export_button, self.copy_button] + dictate + self._note_buttons()
 
     def _open_more_menu(self):
         has_text = bool(self.current_page().get_text().strip())
@@ -659,6 +667,7 @@ class Workspace:
         has_note = bool(self.current and self.current.note.strip())
         self.copy_button.set(text="Copy" if level < 1 else "")
         self.export_button.set(text="Export" if level < 1 else "")
+        self._dictate_label()
         self.generate_button.set(text=("Regenerate" if has_note else "Create note") if level < 2 else "",
                                  icon_name="refresh" if has_note else "sparkle")
         template = NoteStyleSelector.current_style.replace(" - Default", "")
@@ -721,6 +730,7 @@ class Workspace:
             "choose_template": self._choose_template_from_start,
             "more_templates": lambda anchor: self._open_template_menu(anchor),
             "change_mic": lambda anchor: self._open_mic_menu(anchor),
+            "dictate": self._dictate_from_start,
         }, templates=lambda: (NoteStyleSelector.template_names(), NoteStyleSelector.current_style,
                               NoteStyleSelector.default_style, self.notes_enabled()))
         self._build_capture_side(self.pages)
@@ -854,6 +864,9 @@ class Workspace:
         self.ask_send = Button(body, icon_name="send", variant="primary", size="sm", pill=True, surface=bg,
                                command=self._submit_ask, tooltip="Send (Enter)")
         self.ask_send.pack(side="right")
+        self.ask_mic = Button(body, icon_name="mic", variant="ghost", size="sm", pill=True, surface=bg,
+                              command=self.dictate_instruction,
+                              tooltip="Say what to change; the AI revises the note when you stop")
         self.ask_entry = PlaceholderEntry(body, placeholder=ASK_PLACEHOLDER, bg=bg, font=Theme.font("medium"),
                                           on_submit=lambda value: self._submit_ask())
         self.ask_entry.pack(side="left", fill="x", expand=True, padx=Theme.px(10))
@@ -870,10 +883,10 @@ class Workspace:
         inner.pack(expand=True, padx=Theme.px(10), pady=Theme.px(8))
         self.compact_record = Button(inner, icon_name="mic", variant="primary", size="md", pill=True, surface=bg,
                                      command=lambda: self._act("toggle_recording"),
-                                     tooltip=Theme.keys("Start or stop transcribing (Alt+R)"))
+                                     tooltip=lambda: Shortcuts.hint("Start or stop transcribing", "record"))
         self.compact_record.pack(side="left")
         self.compact_pause = Button(inner, icon_name="pause", variant="neutral", size="md", pill=True, surface=bg,
-                                    command=lambda: self._act("toggle_pause"), tooltip=Theme.keys("Pause or resume (Alt+P)"))
+                                    command=lambda: self._act("toggle_pause"), tooltip=lambda: Shortcuts.hint("Pause or resume", "pause"))
         self.compact_pause.pack(side="left", padx=(Theme.px(6), 0))
         self.compact_time = tk.Label(inner, text="00:00", bg=bg, fg=Palette.TEXT, font=Theme.font("medium", "semibold"),
                                      width=6)
@@ -1560,6 +1573,7 @@ class Workspace:
         popup_menu(self.help_button, [
             {"label": "Help guide", "command": lambda: self._act("help_guide")},
             {"label": "About FreeScribe", "command": lambda: self._act("about")},
+            {"label": "Keyboard shortcuts…", "command": lambda: self._act("keyboard_shortcuts")},
             {"label": "Third-party licences", "command": lambda: self._act("third_party_notices")},
             None,
             {"label": "Debug window", "command": lambda: self._act("debug_window")},
@@ -1635,6 +1649,9 @@ class Workspace:
             else:
                 self.suggestions.pack_forget()
         self.ask_send.set_enabled(can_ask)
+        if self.voice is not None:
+            self.ask_mic.set_enabled(can_ask or self.voice.is_typing_into(self.ask_entry))
+            self.dictate_button.set_enabled(not self.is_recording or self.voice.active)
         self.ask_entry.configure(state="normal" if can_ask else "disabled")
         self.ask_entry.set_placeholder(ASK_PLACEHOLDER if (target is not None or not idle) else ASK_PLACEHOLDER_EMPTY)
 
@@ -1701,10 +1718,37 @@ class Workspace:
             self._apply_note_mode()
             if hasattr(self, "start_screen") and self.start_screen.winfo_manager():
                 self.start_screen.refresh_templates()
+            shown = name.replace(" - Default", "")
+            default = NoteStyleSelector.default_style
             if name == NoteStyleSelector.NO_NOTE_STYLE:
                 self.toast("Sessions will be transcribed without creating a note", icon_name="info")
             elif self.current is not None and self.current.note.strip():
-                self.toast(f"Template set to {name}. Regenerate to apply it.", icon_name="doc")
+                self.toast(f"Template set to {shown}. Regenerate to apply it.", icon_name="doc")
+            elif name != default:
+                # Only this session: a new session (also one started from the browser extension)
+                # starts with the default again, so say so and offer to change the default
+                self.toast(f"{shown} for this session. New sessions start with {default.replace(' - Default', '')}.",
+                           icon_name="doc", action_text="Use for new sessions",
+                           action=lambda: self._make_default_template(), duration=8000)
+
+    def template_state(self):
+        """The note template now and for new sessions, for the browser extension."""
+        return {"current": NoteStyleSelector.current_style, "default": NoteStyleSelector.default_style,
+                "options": NoteStyleSelector.template_names()}
+
+    def choose_template(self, name, make_default=False):
+        """Choose the note template (from the browser extension). Returns False when there is no such template."""
+        if name not in NoteStyleSelector.template_names():
+            return False
+        if name != NoteStyleSelector.current_style:
+            NoteStyleSelector.select_style(name)
+            self._apply_note_mode()
+            if hasattr(self, "start_screen") and self.start_screen.winfo_manager():
+                self.start_screen.refresh_templates()
+            self._refresh_toolbar()
+        if make_default:
+            NoteStyleSelector.set_default(name)
+        return True
 
     def _make_default_template(self):
         name = NoteStyleSelector.current_style
@@ -1887,6 +1931,98 @@ class Workspace:
             return
         self.ask_entry.set_value(text)
         self._submit_ask()
+
+    def shortcuts_changed(self):
+        """The keyboard shortcuts were changed: show the new ones where they are written out."""
+        self.start_screen.shortcuts_changed()
+
+    # ================================================================ dictation
+    def enable_dictation(self, voice):
+        """Turn on dictation (UI.VoiceTyping) in the note area and the assistant bar."""
+        self.voice = voice
+        self.start_screen.show_dictate()
+        self.ask_mic.pack(side="right", padx=(0, Theme.px(4)), before=self.ask_send)
+        self._layout_actions()
+        self._fit_toolbar()
+
+    def _dictate_from_start(self):
+        """The start screen's "Dictate a note": open the Note tab and dictate into it."""
+        self.toggle_dictation()
+
+    def _dictate_label(self):
+        typing = self.voice is not None and self.voice.active and not self.voice.is_typing_into(self.ask_entry)
+        compact = self._toolbar_level >= 2          # keeps its word after Copy and Export lose theirs
+        if typing:
+            self.dictate_button.set(text="" if compact else "Stop dictating", icon_name="stop", variant="danger-ghost")
+        else:
+            self.dictate_button.set(text="" if compact else "Dictate", icon_name="mic", variant="ghost-strong")
+
+    def toggle_dictation(self):
+        """Dictate at the cursor of the open tab (the note, transcript, context or a document)."""
+        if self.voice is None:
+            return
+        if self.voice.active:
+            if self.voice.is_typing_into(self.ask_entry):
+                self.toast("Stop the dictated request first", icon_name="info")
+            else:
+                self.voice.stop()
+            return
+        if self.locked or self.is_recording:
+            self.toast("Stop recording first, then dictate", icon_name="info")
+            return
+        if self.start_screen.winfo_manager():
+            # Nothing to type into behind the start screen: dictate into the note
+            self._leave_start_screen("note")
+            self.note.text.mark_set("insert", "end-1c")
+        page = self.current_page()
+        if str(page.text.cget("state")) == "disabled":
+            self.toast("This tab can't be edited right now", icon_name="info")
+            return
+        page.focus_editor()
+        problem = self.voice.start(page.text, on_state=self._dictation_state)
+        if problem:
+            self.toast(problem, icon_name="info")
+
+    def _dictation_state(self, state):
+        self._dictate_label()
+        self._fit_toolbar()
+        if state == "listening":
+            self.toast("Listening. Pause briefly and the words appear at the cursor.", icon_name="mic", duration=3500)
+        elif state == "idle" and self.voice is not None and self.voice.last_error:
+            self.toast(self.voice.last_error, icon_name="info")
+
+    def dictate_instruction(self):
+        """Say what to change in the note; the request is sent to the AI when you stop."""
+        if self.voice is None:
+            return
+        if self.voice.is_typing_into(self.ask_entry):
+            self.voice.stop()
+            return
+        if self.voice.active:
+            self.toast("Stop dictating first", icon_name="info")
+            return
+        if self.ask_target() is None or self.locked or self.is_recording:
+            self.toast("Create a note first, then ask for edits", icon_name="info")
+            return
+        self.ask_entry.focus_set()
+        self.ask_entry.set_value("")
+
+        def state(value):
+            listening = value in ("listening", "finishing")
+            self.ask_mic.set(icon_name="stop" if listening else "mic", variant="danger-ghost" if listening else "ghost")
+            self.ask_entry.set_placeholder("Listening… say what to change, then press the stop button" if listening
+                                           else ASK_PLACEHOLDER)
+            self._dictate_label()
+
+        def done(text):
+            if text.strip() and self.ask_entry.get_value().strip():
+                self._submit_ask()
+            elif self.voice is not None and self.voice.last_error:
+                self.toast(self.voice.last_error, icon_name="info")
+
+        problem = self.voice.start(self.ask_entry, on_state=state, on_done=done)
+        if problem:
+            self.toast(problem, icon_name="info")
 
     def _submit_ask(self):
         instruction = self.ask_entry.get_value().strip()

@@ -54,6 +54,11 @@ class AppState:
     speech_ready: bool = True
     patient: Dict[str, str] = field(default_factory=dict)   # the patient linked to the session (from the EMR)
     seconds: float = 0.0            # length of the recording so far
+    # A question FreeScribe is waiting on (a pop-up in the app), so the extension can show and answer it:
+    # {"id": ..., "text": ..., "options": [{"id": ..., "label": ...}]}; None when there is none
+    question: Optional[dict] = None
+    error: str = ""                 # the error shown in the app's banner ("" when none)
+    template: Optional[dict] = None # {"current", "default", "options"}: the note template, None when unknown
 
 
 def note_for_emr(note: str) -> str:
@@ -74,20 +79,27 @@ class VisitControl:
                  pause: Callable[[], None], resume: Callable[[], None], add_context: Callable[[str], None],
                  version: str = "", set_patient: Optional[Callable[[Dict[str, str]], None]] = None,
                  clear_patient: Optional[Callable[[], None]] = None,
-                 new_session: Optional[Callable[[], None]] = None):
+                 new_session: Optional[Callable[[], None]] = None,
+                 sessions: Optional[Callable[[], list]] = None, extension_version: str = ""):
         self.state = state
         self._start, self._stop, self._pause, self._resume = start, stop, pause, resume
         self._add_context = add_context
         self._set_patient = set_patient
         self._clear_patient = clear_patient
         self._new_session = new_session
+        # () -> [{"id", "title", "note", "patient", "updated", "busy"}], newest first: every session,
+        # so the note of the chart's own patient can be found (see note_for)
+        self._sessions = sessions
         self.version = version
+        self.extension_version = extension_version   # the extension that comes with this FreeScribe
 
     # ------------------------------------------------------------------ status
     def status(self) -> dict:
         s = self.state()
         if s.recording:
             phase = "paused" if s.paused else "recording"
+        elif s.question:
+            phase = "question"          # waiting for an answer, not working
         elif s.busy:
             phase = "working"
         elif s.note.strip():
@@ -97,12 +109,16 @@ class VisitControl:
         return {
             "app": "FreeScribe",
             "version": self.version,
+            "extension_version": self.extension_version,
             "phase": phase,
             "recording": s.recording,
             "paused": s.paused,
             "busy": s.busy,
             "writes_note": s.writes_note,
             "seconds": round(float(s.seconds or 0), 1),
+            "question": s.question or None,
+            "error": s.error or "",
+            "template": s.template or None,
             "session": {
                 "id": s.session_id,
                 "title": s.title,
@@ -145,6 +161,31 @@ class VisitControl:
             raise ControlError("No session is open in FreeScribe.")
         return {"session_id": s.session_id, "title": s.title, "note": s.note, "plain": note_for_emr(s.note),
                 "busy": s.busy}
+
+    def note_for(self, payload: dict) -> dict:
+        """
+        The note for the patient whose chart is open in the EMR (``payload["patient"]``), so a note is
+        never put into another patient's chart. ``match``: "current" (the open session is this
+        patient's), "other" (an earlier session of this patient has a note), or "none" (FreeScribe
+        has no note for this patient; ``session_patient`` says whose the open session is).
+        """
+        chart = patient_details.clean((payload or {}).get("patient") or {})
+        if not chart:
+            raise ControlError("No single patient's chart is open on this page.")
+        s = self.state()
+        if s.patient and same_patient(s.patient, chart):
+            return {"match": "current", "session_id": s.session_id, "title": s.title, "plain": note_for_emr(s.note),
+                    "busy": s.busy, "patient": patient_details.display_name(s.patient)}
+        for session in (self._sessions() if self._sessions else []):
+            patient = session.get("patient") or {}
+            if patient and same_patient(patient, chart) and (session.get("note") or "").strip():
+                return {"match": "other", "session_id": session.get("id", ""), "title": session.get("title", ""),
+                        "plain": note_for_emr(session["note"]), "updated": session.get("updated", ""),
+                        "busy": "Writing the note" if session.get("busy") else "",
+                        "patient": patient_details.display_name(patient)}
+        return {"match": "none", "chart": patient_details.display_name(chart),
+                "session_patient": patient_details.display_name(s.patient) if s.patient else "",
+                "has_note": bool(s.note.strip())}
 
     def context(self, payload: dict) -> dict:
         text = str((payload or {}).get("text") or "").strip()
