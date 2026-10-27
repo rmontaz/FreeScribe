@@ -677,7 +677,7 @@ kbd { font: 600 10.5px system-ui, sans-serif; padding: 1px 5px; border-radius: 5
         body += `<div class="ask warn"><div class="ask-title">Update the extension</div>
           <div class="ask-line">FreeScribe comes with version ${esc(shipped)}; Chrome is running ${esc(FS_VERSION || "an older one")}.</div>
           <div class="row2"><button class="small-primary" data-do="self-update">Update now</button></div>
-          <div class="ask-note">Takes a second. Open FreeScribe pages reload their panel.</div></div>`;
+          <div class="ask-note">Takes a few seconds. If the panel doesn't come back, open chrome://extensions and press the reload arrow on FreeScribe.</div></div>`;
       }
       if (guard) {
         body += `<div class="ask warn"><div class="ask-title">Not inserted: different patient</div>

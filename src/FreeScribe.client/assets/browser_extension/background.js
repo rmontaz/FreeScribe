@@ -128,7 +128,10 @@ const panelActions = {
   },
   // Load the extension's files again (FreeScribe keeps its folder up to date): the panel's "Update now"
   async "self-reload"() {
-    setTimeout(() => chrome.runtime.reload(), 150);
+    // The notification stays after the reload, in case Chrome does not bring the extension back by itself
+    notify("Updating the FreeScribe extension", "The panel comes back in a few seconds. If it doesn't, open " +
+      "chrome://extensions and press the reload arrow on FreeScribe.");
+    setTimeout(() => chrome.runtime.reload(), 400);
     return {};
   },
   async options() {
