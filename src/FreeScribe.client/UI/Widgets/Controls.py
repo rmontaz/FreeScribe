@@ -190,6 +190,10 @@ class Button(tk.Canvas):
     def text(self):
         return self._text
 
+    @property
+    def icon_name(self):
+        return self._icon_name
+
     def invoke(self):
         """Run the button's command if it is enabled."""
         if self._enabled and self._command:
@@ -505,6 +509,14 @@ class PlaceholderEntry(tk.Entry):
             self._internal = False
         if self.focus_get() is not self:
             self._show_placeholder_if_empty()
+
+    @property
+    def showing_placeholder(self) -> bool:
+        return self._showing_placeholder
+
+    def clear_placeholder(self):
+        """Remove the hint so text can be typed in even when the box doesn't have the keyboard focus."""
+        self._on_focus_in()
 
     def set_placeholder(self, placeholder: str):
         self._placeholder = placeholder

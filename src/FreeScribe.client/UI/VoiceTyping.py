@@ -154,6 +154,11 @@ class VoiceTyping:
             w.see("fs_dictation")
             w.event_generate("<<Modified>>")
         elif isinstance(w, tk.Entry):
+            if getattr(w, "showing_placeholder", False):
+                # The box shows its grey hint because it doesn't have the keyboard focus (FreeScribe is
+                # not the active window): remove the hint so the words aren't mixed into it and lost.
+                w.clear_placeholder()
+                self._entry_pos = 0
             value = w.get()
             pos = min(self._entry_pos, len(value))
             text = _spaced(value[:pos], piece.replace("\n", " "))

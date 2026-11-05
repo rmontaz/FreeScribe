@@ -91,6 +91,22 @@ def test_entry_and_one_at_a_time(root):
     other.destroy()
 
 
+def test_box_showing_its_hint_without_the_focus(root):
+    """FreeScribe isn't the active window, so the box keeps its grey hint: the words replace the hint."""
+    from UI.Widgets.Controls import PlaceholderEntry
+    entry = PlaceholderEntry(root, placeholder="Say what to change")
+    entry.pack()
+    root.update()
+    assert entry.showing_placeholder
+    voice = voice_for(root, ["left knee", "pain"])
+    assert voice.start(entry) == ""
+    assert run_until(root, lambda: entry.get_value().endswith("pain"))
+    voice.stop()
+    assert run_until(root, lambda: not voice.active)
+    assert entry.get_value() == "left knee pain"
+    entry.destroy()
+
+
 def test_refused_while_the_microphone_is_busy(root):
     voice = voice_for(root, ["x"], busy="The microphone is in use for the visit recording.")
     assert "visit recording" in voice.start(tk.Entry(root))
@@ -107,14 +123,17 @@ def test_dictate_into_the_note(root, workspace):
     assert workspace.dictate_button.winfo_ismapped()
     workspace.note.text.mark_set("insert", "end-1c")
     workspace.toggle_dictation()
-    assert workspace.voice.active and "Stop" in workspace.dictate_button.text
+    # On a small screen the toolbar shows icons only, so check the icon and allow an empty label
+    assert workspace.voice.active and workspace.dictate_button.icon_name == "stop"
+    assert workspace.dictate_button.text in ("Stop dictating", "")
     assert run_until(root, lambda: "pain" in workspace.note.get_text())
     workspace.toggle_dictation()              # the same button stops
     assert run_until(root, lambda: not workspace.voice.active)
     pump(root)
     assert workspace.note.get_text() == "Assessment: mechanical low back pain"
     assert workspace.current.note == "Assessment: mechanical low back pain"
-    assert workspace.dictate_button.text == "Dictate"
+    assert workspace.dictate_button.icon_name == "mic"
+    assert workspace.dictate_button.text in ("Dictate", "")
 
 
 def test_change_the_note_by_voice(root, workspace):
