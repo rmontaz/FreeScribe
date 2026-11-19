@@ -202,3 +202,65 @@ def test_eform_fill_uses_the_dictation_and_polls():
     job = vc.eform({"action": "fill", "dictation_id": did, "fields": [{"id": "f1"}]})["job"]
     r = vc.eform({"action": "poll", "job": job})
     assert r["done"] and r["values"] == {"f1": "Cough"} and asked["form_text"] == "The patient has a cough"
+
+
+def control_with(scripts, transcribe=fake_transcribe, **kw):
+    """A VoiceControl whose successive dictations play the given scripts."""
+    streams = [FakeStream(script) for script in scripts]
+    made = []
+
+    def make():
+        stream = streams[len(made)]
+        made.append(stream)
+        return ld.LiveDictation(lambda: (stream, None), transcribe)
+
+    vc = VoiceControl(make, lambda: "", lambda text, done: done(text, ""), lambda p, t, done: done({}, {}, []), **kw)
+    return vc, made
+
+
+def test_a_new_dictation_can_start_while_the_last_is_still_finishing():
+    def slow(audio):
+        time.sleep(1.0)               # the last words take a while to transcribe
+        return fake_transcribe(audio)
+
+    vc, made = control_with([[(1.5, 0.1), (0.8, 0)], [(1.4, 0.2), (0.8, 0)]], transcribe=slow)
+    first = vc.dictate({"action": "start"})["id"]
+    time.sleep(2.0)                   # a piece is being transcribed
+    vc.dictate({"action": "stop", "id": first})
+    assert not vc.busy                # the microphone is free the moment it is stopped
+    second = vc.dictate({"action": "start"})["id"]          # no "already on" refusal
+    assert second != first
+    r = poll_until(vc, first, lambda r: r["finished"])      # the first one still delivers its words
+    assert [t for _, t in r["pieces"]] == ["The patient has a cough"]
+    r = poll_until(vc, second, lambda r: len(r["pieces"]) == 1)
+    assert r["recording"] and r["pieces"][0][1] == "for three days"
+
+
+def test_only_one_dictation_listens_at_a_time():
+    vc, _ = control_with([[(5, 0)], [(5, 0)]])
+    vc.dictate({"action": "start"})
+    with pytest.raises(VoiceError) as e:
+        vc.dictate({"action": "start"})
+    assert e.value.code == "busy"
+
+
+def test_listening_stops_when_the_page_stops_asking():
+    vc, made = control_with([[(30, 0)]], idle_seconds=0.4, check_every=0.05)
+    did = vc.dictate({"action": "start"})["id"]
+    for _ in range(8):                # a page that is still there keeps asking
+        time.sleep(0.1)
+        assert vc.dictate({"action": "poll", "id": did, "since": 0})["recording"]
+    time.sleep(0.9)                   # the page was closed: nobody asks any more
+    assert not vc.busy
+    assert vc.dictate({"action": "poll", "id": did, "since": 0})["recording"] is False
+    assert made[0].closed
+
+
+def test_cancelling_when_the_page_is_left_frees_the_microphone():
+    vc, made = control_with([[(30, 0)]])
+    did = vc.dictate({"action": "start"})["id"]
+    vc.dictate({"action": "cancel", "id": did})
+    deadline = time.time() + 3
+    while vc.busy and time.time() < deadline:
+        time.sleep(0.02)
+    assert not vc.busy

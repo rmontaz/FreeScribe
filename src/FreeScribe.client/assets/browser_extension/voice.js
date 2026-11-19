@@ -142,11 +142,15 @@ tr.off td { opacity: .45; }
   let barTimer = null;
 
   async function startDictation(mode = "chart", onPiece = null) {
-    if (dict) return dict;
+    if (dict && dict.phase === "live") return dict;
+    // One that was stopped is still typing its last words: let it finish, and start listening now
+    const previous = dict && dict.mode === "chart" && mode === "chart" ? dict : null;
+    if (dict && !previous) return dict;
     try {
       const reply = await fs("/api/dictate", { action: "start" });
+      if (previous) previous.detached = true;
       dict = { id: reply.id, mode, since: 0, queue: [], text: "", frames: new Set(), where: "", level: 0, elapsed: 0,
-               phase: "live", tidy: null, error: "", onPiece, started: Date.now() };
+               phase: "live", tidy: null, error: "", onPiece, started: Date.now(), previous };
     } catch (error) {
       if (mode === "chart") showBarMessage(error.message, "warn");
       throw error;
@@ -174,7 +178,7 @@ tr.off td { opacity: .45; }
   }
 
   async function loop(d) {
-    while (dict === d && !d.cancelled) {
+    while ((dict === d || d.detached) && !d.cancelled) {
       let r;
       try {
         r = await fs("/api/dictate", { action: "poll", id: d.id, since: d.since });
@@ -191,7 +195,8 @@ tr.off td { opacity: .45; }
       d.level = r.level;
       d.elapsed = r.elapsed;
       if (r.error) d.error = r.error;
-      if (d.mode === "chart") await typeQueued(d);
+      // The words of an earlier dictation still finishing go in first
+      if (d.mode === "chart" && !(d.previous && !d.previous.done)) await typeQueued(d);
       if (!r.recording && d.phase === "live") d.phase = "finishing";    // stopped by FreeScribe (time limit, microphone)
       const tidy = r.tidy || {};
       if (r.finished && !["wanted", "working"].includes(tidy.state)) {
@@ -201,9 +206,10 @@ tr.off td { opacity: .45; }
       renderBar();
       await sleep(d.phase === "live" ? 350 : 500);
     }
-    if (dict !== d || d.cancelled) return;
+    if ((dict !== d && !d.detached) || d.cancelled) { d.done = true; return; }
     if (d.mode === "chart") await finishChart(d);
     else if (d.onDone) d.onDone(d);
+    d.done = true;
     if (dict === d) dict = null;
   }
 
@@ -257,6 +263,7 @@ tr.off td { opacity: .45; }
   }
 
   function showBarMessage(text, kind = "", ms = 4500, copyText = "") {
+    if (dict && dict.mode === "chart" && dict.phase === "live" && !copyText) return;   // a new dictation is on
     barMessage = { text, kind, copyText };
     clearTimeout(barTimer);
     if (ms) barTimer = setTimeout(() => { barMessage = null; renderBar(); }, ms);
@@ -323,10 +330,7 @@ tr.off td { opacity: .45; }
 
   async function toggle() {
     if (form) return;      // the form window has its own buttons
-    if (dict && dict.mode === "chart") {
-      if (dict.phase === "live") stopDictation(tidyDefault);
-      return;
-    }
+    if (dict && dict.mode === "chart" && dict.phase === "live") { stopDictation(tidyDefault); return; }
     try { await startDictation("chart"); } catch (_error) { /* shown */ }
   }
 
@@ -547,6 +551,14 @@ tr.off td { opacity: .45; }
       return false;
     });
   } catch (_error) { /* orphaned */ }
+
+  // Leaving the page (closing the tab, going to another page) ends dictation straight away; FreeScribe also
+  // stops by itself when nothing has asked for the text for a while.
+  window.addEventListener("pagehide", () => {
+    for (const d of [dict].filter(Boolean)) {
+      try { chrome.runtime.sendMessage({ fs: "call", path: "/api/dictate", body: { action: "cancel", id: d.id } }); } catch (_error) { /* orphaned */ }
+    }
+  });
 
   window.__fsVoice = {
     version: FS_VERSION,
