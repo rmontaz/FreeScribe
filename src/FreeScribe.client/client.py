@@ -73,7 +73,7 @@ from UI.ScrubWindow import ScrubWindow
 from utils.log_config import logger
 from Model import ModelStatus
 from services.whisper_hallucination_cleaner import hallucination_cleaner
-from utils.whisper.WhisperModel import load_stt_model, faster_whisper_transcribe, is_whisper_valid, is_whisper_lock, load_model_with_loading_screen, unload_stt_model, get_model_from_settings, WhisperModelStatus, get_whisper_model, set_whisper_model
+from utils.whisper.WhisperModel import detect_language_probabilities, load_stt_model, faster_whisper_transcribe, is_whisper_valid, is_whisper_lock, load_model_with_loading_screen, unload_stt_model, get_model_from_settings, WhisperModelStatus, get_whisper_model, set_whisper_model
 from services.factual_consistency import find_factual_inconsistency
 from services.note_text import plain_note
 from services import patient_details
@@ -2408,6 +2408,162 @@ def new_live_dictation(on_piece=None):
     return dictation
 
 
+# ------------------------------------------------------------ translate window
+def translate_ai_is_private():
+    """Translate keeps what is said on this computer or private network: the AI must be local or on a private network."""
+    return bool(app_settings.editable_settings[SettingsKeys.LOCAL_LLM.value]) or is_private_ip(
+        app_settings.editable_settings[SettingsKeys.LLM_ENDPOINT.value])
+
+
+def _speech_engine_names_the_language():
+    """Only the Windows and Linux speech engine reports how likely each language is."""
+    return bool(app_settings.editable_settings[SettingsKeys.LOCAL_WHISPER.value]) and \
+        (utils.system.is_windows() or utils.system.is_linux())
+
+
+def _use_multilingual_speech_model(done):
+    """
+    Translate needs a speech model that knows other languages. When Settings has an English-only one,
+    offer the multilingual model of the same size, load it, then call ``done("")`` (or ``done(reason)``).
+    """
+    from services import translate as tr
+    settings = app_settings.editable_settings
+    label = str(settings[SettingsKeys.WHISPER_MODEL.value])
+    if not settings[SettingsKeys.LOCAL_WHISPER.value] or not tr.is_english_only_label(label):
+        done("")
+        return
+    better = tr.multilingual_label(label)
+    if not messagebox.askyesno(
+            "Translate",
+            f"Translate needs a speech model that understands other languages, and the one in Settings is "
+            f"\"{label}\".\n\nSwitch to \"{better}\"? It stays on this computer. If it has not been used "
+            f"before it is downloaded once, which can take a few minutes. You can change it back in Settings.",
+            parent=root):
+        done("Translate needs the multilingual speech model. Choose it in Settings, or switch when asked.")
+        return
+    settings[SettingsKeys.WHISPER_MODEL.value] = better
+    entry = app_settings.editable_settings_entries.get(SettingsKeys.WHISPER_MODEL.value)
+    try:
+        if entry is not None:
+            entry.set(better)
+    except Exception:
+        pass
+    app_settings.save_settings_to_file()
+    try:
+        unload_stt_model()
+    except Exception as e:
+        logger.warning(f"The speech model could not be unloaded before switching: {e}")
+    load_model_with_loading_screen(root=root, app_settings=app_settings)
+
+    def wait(waited=0):
+        if get_whisper_model() == WhisperModelStatus.ERROR:
+            done("The multilingual speech model could not be loaded. Check Settings.")
+        elif is_whisper_valid():
+            done("")
+        elif waited > 1800:
+            done("The multilingual speech model is taking too long to load. Try again in a moment.")
+        else:
+            root.after(300, lambda: wait(waited + 1))
+    wait()
+
+
+def transcribe_in_language(audio, language):
+    """Speech in a known language written down as it was said (never translated by the speech model)."""
+    settings = app_settings.editable_settings
+    if settings[SettingsKeys.LOCAL_WHISPER.value]:
+        low_memory = app_settings.is_low_mem_mode()
+        if not is_whisper_valid() and low_memory:
+            load_stt_model(app_settings=app_settings).join()
+        if not is_whisper_valid():
+            raise RuntimeError("The speech-to-text model is still loading. Try again in a moment.")
+        text = faster_whisper_transcribe(audio, app_settings=app_settings, language=language, prompt=None,
+                                         translate=False)
+    else:
+        headers = {"Authorization": f"Bearer {settings[SettingsKeys.WHISPER_SERVER_API_KEY.value]}"}
+        body = {"use_translate": False, "language_code": language}
+        files = {"audio": ("translate.wav", to_wav_bytes(audio, RATE), "audio/wav")}
+        response = requests.post(settings[SettingsKeys.WHISPER_ENDPOINT.value], headers=headers, files=files,
+                                 data=body, verify=not settings[SettingsKeys.S2T_SELF_SIGNED_CERT.value],
+                                 timeout=(10, 120))
+        if response.status_code != 200:
+            raise RuntimeError(f"The speech-to-text server returned an error (HTTP {response.status_code}).")
+        text = response.json().get("text", "")
+    if settings[SettingsKeys.ENABLE_HALLUCINATION_CLEAN.value] and FeatureToggle.HALLUCINATION_CLEANING:
+        text = hallucination_cleaner.clean_text(text)
+    return (text or "").strip()
+
+
+class TranslateBackend:
+    """What the Translate window needs from the app: the speech engine, the microphone and the AI."""
+
+    def auto_available(self):
+        return _speech_engine_names_the_language()
+
+    def prepare(self, done):
+        reason = mic_busy_reason()
+        if reason:
+            done(reason)
+        elif not translate_ai_is_private():
+            done("Translate keeps everything on this computer or your private network, so it needs the built-in AI "
+                 "model or an AI server on your own network. Change this in Settings.")
+        else:
+            _use_multilingual_speech_model(done)
+
+    def new_dictation(self, plan, on_utterance):
+        from services import translate as tr
+        from services.live_dictation import LiveDictation
+        try:
+            threshold = float(app_settings.editable_settings[SettingsKeys.SILERO_SPEECH_THRESHOLD.value])
+        except (TypeError, ValueError):
+            threshold = app_settings.DEFAULT_SETTINGS_TABLE[SettingsKeys.SILERO_SPEECH_THRESHOLD.value]
+        heard = {"language": ""}
+
+        def transcribe(audio):
+            mode, left, right = plan()
+            language = {"left": left, "right": right}.get(mode)
+            if language is None:      # Auto: whichever of the two languages on screen it sounds like
+                probabilities = detect_language_probabilities(audio) if self.auto_available() else None
+                language = tr.choose_language(probabilities, left, right)[0] if probabilities else left
+            heard["language"] = language
+            return transcribe_in_language(audio, language)
+
+        def finished():
+            if app_settings.editable_settings[SettingsKeys.LOCAL_WHISPER.value] and app_settings.is_low_mem_mode() \
+                    and not is_recording and not mic_busy_reason():
+                unload_stt_model()
+
+        dictation = LiveDictation(open_microphone_stream, transcribe, is_silent=lambda samples: is_silent(samples, threshold),
+                                  on_piece=lambda number, text: on_utterance(text, heard["language"]),
+                                  on_finished=finished, plain=True)
+        _mic_users.add(dictation)
+        return dictation
+
+    def translate(self, text, source, target, done):
+        from services import translate as tr
+
+        def work():
+            try:
+                reply = send_text_to_chatgpt(tr.translation_prompt(text, source, target))
+            except Exception as e:
+                logger.exception("Translation failed")
+                done(None, f"The AI could not be reached: {e}")
+                return
+            if not reply or is_llm_error(reply):
+                done(None, describe_llm_error(reply) if reply else "The AI gave no text back.")
+                return
+            done(reply, "")
+        threading.Thread(target=work, daemon=True).start()
+
+
+translate_backend = TranslateBackend()
+
+
+def open_translate():
+    """The Translate window: two people, two languages, on this computer."""
+    from UI.TranslateWindow import TranslateWindow
+    TranslateWindow.show(root, translate_backend, run_on_ui, ui_state)
+
+
 def tidy_dictation(text, done):
     """
     Asks the AI to tidy dictated ``text`` (punctuation, misheard words); calls ``done(reply or None, problem)``
@@ -3199,6 +3355,7 @@ workspace = Workspace(
         "generate_document": generate_document,
         "fill_form": fill_form,
         "open_chat": open_chat,
+        "open_translate": open_translate,
         "find_drug_flags": find_drug_flags,
         "open_eform_mapper": open_eform_mapper,
         "open_browser_extension": open_browser_extension,

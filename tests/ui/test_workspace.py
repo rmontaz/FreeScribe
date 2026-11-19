@@ -441,6 +441,7 @@ def test_long_history_is_listed_a_page_at_a_time(root, workspace):
 # ------------------------------------------------------------------ PDF forms
 def test_fill_pdf_form_has_its_own_sidebar_button(root, workspace):
     from UI.Widgets import Controls
+    workspace.set_beta_notice_hidden(True)
     assert workspace.fill_form_button.enabled                      # usable even before anything is recorded
     workspace.fill_form_button.invoke()
     assert ("fill_form", ()) in workspace.calls
@@ -451,6 +452,45 @@ def test_fill_pdf_form_has_its_own_sidebar_button(root, workspace):
 
 
 def test_chat_has_its_own_sidebar_button(workspace):
+    workspace.set_beta_notice_hidden(True)
+    workspace.chat_button.invoke()
+    assert ("open_chat", ()) in workspace.calls
+
+
+# ------------------------------------------------------------------ Beta testing group
+def test_beta_tools_sit_in_their_own_group_below_the_tools(workspace):
+    assert workspace.chat_button.master is workspace.beta_frame
+    assert workspace.fill_form_button.master is workspace.beta_frame
+    assert workspace.chat_button.master is not workspace.tools_frame
+    assert workspace.fill_form_button.master is not workspace.tools_frame
+
+
+def test_beta_feature_opens_only_after_the_notice_is_accepted(root, workspace):
+    workspace.chat_button.invoke()
+    pump(root)
+    assert workspace.beta_dialog.winfo_exists()
+    assert ("open_chat", ()) not in workspace.calls                  # nothing opens until Continue
+    workspace.beta_dialog_finish(True)
+    assert ("open_chat", ()) in workspace.calls
+    assert not workspace.beta_notice_hidden()                         # it will ask again next time
+
+
+def test_beta_notice_not_now_does_not_open_the_feature(root, workspace):
+    workspace.fill_form_button.invoke()
+    pump(root)
+    workspace.beta_dialog_finish(False)
+    assert ("fill_form", ()) not in workspace.calls
+
+
+def test_beta_notice_can_be_switched_off_for_the_whole_group(root, workspace):
+    workspace.chat_button.invoke()
+    pump(root)
+    workspace.beta_dialog_hide.set(True)
+    workspace.beta_dialog_finish(True)
+    assert workspace.beta_notice_hidden()
+    workspace.calls.clear()
+    workspace.fill_form_button.invoke()                               # a different beta feature: no notice now
+    assert ("fill_form", ()) in workspace.calls
     workspace.chat_button.invoke()
     assert ("open_chat", ()) in workspace.calls
 
@@ -690,3 +730,21 @@ def test_patient_from_the_chart_can_be_switched_and_unlinked(root, workspace):
     session.title = "Priya - follow-up"
     workspace.clear_patient()
     assert session.title == "Priya - follow-up"
+
+
+def test_translate_has_a_sidebar_entry_in_the_tools(root, tmp_path, monkeypatch):
+    # The fixture's actions do not include it, so build a workspace that does
+    from UI.Widgets import Controls
+    from UI.Workspace import Workspace
+    monkeypatch.setattr(Controls.popup_menu, "enabled", False)
+    calls = []
+    actions = {"get_status": lambda: [], "get_language": lambda: "Auto-detect",
+               "get_data_options": lambda: {"recordings": False, "logs": False},
+               "open_translate": lambda: calls.append("open_translate"), "open_chat": lambda: None}
+    ws = Workspace(root, SessionStore(), actions, ui_state=FakeState(), mic=FakeMic(), version="vTest")
+    pump(root)
+    assert ws.translate_button.master is ws.tools_frame            # a tool, not a beta feature
+    assert ws.chat_button.master is ws.beta_frame
+    ws.translate_button.invoke()
+    assert calls == ["open_translate"]
+    ws.frame.destroy()

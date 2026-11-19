@@ -82,13 +82,15 @@ class LiveDictation:
     :param is_silent: float32 samples -> bool; the energy test when not given
     :param on_piece: called with ``(number, text)`` for every new piece (on the worker thread)
     :param on_finished: called once the last piece is done (on the worker thread)
+    :param plain: every piece is its own sentence, exactly as transcribed (no spoken "new line" commands, no
+        joining to the piece before): for translation, where each thing said is translated by itself
     """
 
     def __init__(self, open_stream: Callable[[], Tuple[object, Optional[Exception]]],
                  transcribe: Callable[[np.ndarray], str], is_silent: Optional[Callable[[np.ndarray], bool]] = None,
                  on_piece: Optional[Callable[[int, str], None]] = None,
                  on_finished: Optional[Callable[[], None]] = None, chunk: int = CHUNK, rate: int = RATE,
-                 pause_seconds: float = PAUSE_SECONDS, max_seconds: float = MAX_SECONDS):
+                 pause_seconds: float = PAUSE_SECONDS, max_seconds: float = MAX_SECONDS, plain: bool = False):
         self.open_stream = open_stream
         self.transcribe = transcribe
         self.is_silent = is_silent or rms_silent
@@ -98,6 +100,7 @@ class LiveDictation:
         self.rate = rate
         self.pause_seconds = pause_seconds
         self.max_seconds = max_seconds
+        self.plain = plain
         self.level = 0.0
         self.error = ""
         self._pieces: List[str] = []
@@ -222,9 +225,9 @@ class LiveDictation:
                 except Exception as e:
                     self.error = f"What you said could not be transcribed: {e}"
                     continue
-                text = spoken_commands(text.strip())
+                text = text.strip() if self.plain else spoken_commands(text.strip())
                 with self._lock:
-                    piece = join_piece("".join(self._pieces), text)
+                    piece = text if self.plain else join_piece("".join(self._pieces), text)
                     if not piece:
                         continue
                     self._pieces.append(piece)

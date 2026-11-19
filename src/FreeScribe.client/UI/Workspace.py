@@ -347,6 +347,95 @@ class Workspace:
         self._build_compact(self.frame)
 
     # ---------------------------------------------------------------- sidebar
+    BETA_NOTICE_KEY = "beta_notice_hidden"
+
+    def _build_beta_group(self, footer, bg):
+        """Features still being developed sit together under "Beta testing", behind one notice."""
+        names = ("open_chat", "fill_form", "ask_oscar")
+        if not any(name in self.actions for name in names):
+            return
+        group = tk.Frame(footer, bg=bg)
+        group.pack(fill="x", padx=Theme.px(8), pady=(Theme.px(6), 0))
+        self.beta_frame = group
+        tk.Label(group, text="BETA TESTING", bg=bg, fg=Palette.TEXT_FAINT, font=Theme.font("micro", "semibold"),
+                 anchor="w").pack(fill="x", padx=Theme.px(4), pady=(Theme.px(2), Theme.px(2)))
+        if "open_chat" in self.actions:
+            self.chat_button = ToolRow(group, "Chat about this visit", "chat", Palette.PRIMARY, Palette.PRIMARY_SOFT,
+                                       command=lambda: self._open_beta("open_chat"),
+                                       tooltip="Ask the AI about the open session (beta)")
+            self.chat_button.pack(fill="x")
+        if "ask_oscar" in self.actions:
+            self.ask_oscar_button = ToolRow(group, "Ask OSCAR records", "search", Palette.INFO, Palette.INFO_SOFT,
+                                            command=lambda: self._open_beta("ask_oscar"),
+                                            tooltip="Ask questions about the records in OSCAR (beta)")
+            self.ask_oscar_button.pack(fill="x")
+        if "fill_form" in self.actions:
+            self.fill_form_button = ToolRow(group, "Fill PDF form", "form", "#9A4A12", "#FEEBDD",
+                                            command=lambda: self._open_beta("fill_form"),
+                                            tooltip="Fill a PDF form from the session, or by talking it through (beta)")
+            self.fill_form_button.pack(fill="x")
+
+    def beta_notice_hidden(self):
+        return bool(self.ui_state is not None and self.ui_state.get(self.BETA_NOTICE_KEY, False))
+
+    def set_beta_notice_hidden(self, hidden):
+        if self.ui_state is not None:
+            self.ui_state.set(self.BETA_NOTICE_KEY, bool(hidden))
+
+    def _open_beta(self, action):
+        """Open a beta feature, after a one-time-per-click notice unless the user has switched it off."""
+        if action == "fill_form" and self.locked:
+            return
+        if self.beta_notice_hidden():
+            self._act(action)
+            return
+        self.show_beta_notice(lambda: self._act(action))
+
+    def show_beta_notice(self, on_continue):
+        """The notice shown before a beta feature opens. Continue opens the feature; Not now does not."""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Beta feature")
+        dialog.configure(bg=Palette.BG)
+        dialog.transient(self.root)
+        dialog.resizable(False, False)
+        self.beta_dialog = dialog
+        tk.Label(dialog, text="This feature is still being developed", bg=Palette.BG, fg=Palette.TEXT,
+                 font=Theme.font("large", "semibold"), anchor="w").pack(
+            fill="x", padx=Theme.px(22), pady=(Theme.px(20), Theme.px(4)))
+        tk.Label(dialog, bg=Palette.BG, fg=Palette.TEXT_MUTED, justify="left", anchor="w",
+                 wraplength=Theme.px(420), font=Theme.font("base"),
+                 text="Features under Beta testing are works in progress. They can be glitchy, slow or "
+                      "inaccurate, and they may change or be removed. Check anything they produce before "
+                      "you rely on it.").pack(fill="x", padx=Theme.px(22), pady=(0, Theme.px(12)))
+        hide = tk.BooleanVar(value=False)
+        tk.Checkbutton(dialog, text="Don't show this message again", variable=hide, bg=Palette.BG,
+                       fg=Palette.TEXT, activebackground=Palette.BG, selectcolor=Palette.BG, anchor="w",
+                       font=Theme.font("base")).pack(fill="x", padx=Theme.px(18))
+        buttons = tk.Frame(dialog, bg=Palette.BG)
+        buttons.pack(fill="x", padx=Theme.px(22), pady=Theme.px(16))
+
+        def finish(proceed):
+            if hide.get():
+                self.set_beta_notice_hidden(True)
+            dialog.destroy()
+            if proceed:
+                on_continue()
+
+        Button(buttons, text="Continue", variant="primary", size="md", surface=Palette.BG,
+               command=lambda: finish(True)).pack(side="right")
+        Button(buttons, text="Not now", variant="neutral", size="md", surface=Palette.BG,
+               command=lambda: finish(False)).pack(side="right", padx=(0, Theme.px(8)))
+        dialog.protocol("WM_DELETE_WINDOW", lambda: finish(False))
+        self.beta_dialog_hide, self.beta_dialog_finish = hide, finish
+        dialog.update_idletasks()
+        x = self.root.winfo_rootx() + (self.root.winfo_width() - dialog.winfo_width()) // 2
+        y = self.root.winfo_rooty() + (self.root.winfo_height() - dialog.winfo_height()) // 3
+        dialog.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+        try:
+            dialog.grab_set()
+        except tk.TclError:
+            pass
+
     def _build_sidebar(self, parent):
         bg = Palette.SIDEBAR
         side = tk.Frame(parent, bg=bg, width=Theme.px(self.SIDEBAR_WIDTH))
@@ -385,20 +474,15 @@ class Workspace:
         tools = tk.Frame(side, bg=bg)
         tools.pack(fill="x", padx=Theme.px(8), pady=(Theme.px(8), 0))
         self.tools_frame = tools
-        if any(name in self.actions for name in ("open_chat", "fill_form", "open_eform_mapper",
-                                                 "open_browser_extension")):
+        if any(name in self.actions for name in ("open_translate", "open_eform_mapper", "open_browser_extension")):
             tk.Label(tools, text="TOOLS", bg=bg, fg=Palette.TEXT_FAINT, font=Theme.font("micro", "semibold"),
                      anchor="w").pack(fill="x", padx=Theme.px(4), pady=(Theme.px(4), Theme.px(2)))
-        if "open_chat" in self.actions:
-            self.chat_button = ToolRow(tools, "Chat about this visit", "chat", Palette.PRIMARY, Palette.PRIMARY_SOFT,
-                                       command=lambda: self._act("open_chat"),
-                                       tooltip="Ask the AI about the open session")
-            self.chat_button.pack(fill="x")
-        if "fill_form" in self.actions:
-            self.fill_form_button = ToolRow(tools, "Fill PDF form", "form", "#9A4A12", "#FEEBDD",
-                                            command=lambda: self._act("fill_form") if not self.locked else None,
-                                            tooltip="Fill a PDF form from the session, or by talking it through")
-            self.fill_form_button.pack(fill="x")
+        if "open_translate" in self.actions:
+            self.translate_button = ToolRow(tools, "Translate", "globe", "#0F766E", "#DDF3F0",
+                                            command=lambda: self._act("open_translate"),
+                                            tooltip="Talk with someone in another language: what is said and its "
+                                                    "translation, large enough to show them")
+            self.translate_button.pack(fill="x")
         if "open_eform_mapper" in self.actions:
             self.mapper_button = ToolRow(tools, "eForm mapper", "mapper", Palette.INFO, Palette.INFO_SOFT,
                                          command=lambda: self._act("open_eform_mapper"),
@@ -414,6 +498,8 @@ class Workspace:
         footer = tk.Frame(side, bg=bg)
         footer.pack(side="bottom", fill="x")
         tk.Frame(footer, bg=Palette.BORDER, height=1).pack(fill="x")
+
+        self._build_beta_group(footer, bg)
 
         # Details (model status, storage, version), shown when the status chip is clicked
         self.details_frame = tk.Frame(footer, bg=bg)

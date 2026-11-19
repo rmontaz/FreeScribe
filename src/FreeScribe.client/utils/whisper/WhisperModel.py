@@ -256,7 +256,7 @@ def unload_stt_model(event=None):
         print("STT model is already unloaded.")
 
 
-def faster_whisper_transcribe(audio, app_settings, language=None, prompt=None, info=None):
+def faster_whisper_transcribe(audio, app_settings, language=None, prompt=None, info=None, translate=None):
     """
     Transcribe audio using the Faster Whisper model.
 
@@ -264,15 +264,16 @@ def faster_whisper_transcribe(audio, app_settings, language=None, prompt=None, i
         audio: Audio data to transcribe.
         language: language code to use ("en", "fr" ...); None lets Whisper detect it
         prompt: text Whisper reads first (vocabulary such as drug names)
+        translate: True/False forces "translate to English" on or off for this call; None follows the setting
         info: optional dict that receives ``language``, ``language_probability`` and ``seconds``
 
     Returns:
         str: Transcribed text or error message if transcription fails.
     """
     if utils.system.is_windows() or utils.system.is_linux():
-        return _faster_whisper_transcribe_windows(audio, app_settings, language, prompt, info)
+        return _faster_whisper_transcribe_windows(audio, app_settings, language, prompt, info, translate)
     elif utils.system.is_macos():
-        return _faster_whisper_transcribe_macos(audio, app_settings, language, prompt, info)
+        return _faster_whisper_transcribe_macos(audio, app_settings, language, prompt, info, translate)
     else:
         raise NotImplementedError(f"Unsupported platform: {platform.system()}")
 
@@ -286,7 +287,7 @@ def is_english_only_model(app_settings):
 
 
 @utils.decorators.macos_only
-def _faster_whisper_transcribe_macos(audio, app_settings, language=None, prompt=None, info=None):
+def _faster_whisper_transcribe_macos(audio, app_settings, language=None, prompt=None, info=None, translate=None):
     """
     Transcribe audio using the Faster Whisper model.
 
@@ -302,7 +303,8 @@ def _faster_whisper_transcribe_macos(audio, app_settings, language=None, prompt=
     # passing arguments to translate
     generate_kwargs = {}
     english_only = is_english_only_model(app_settings)
-    if app_settings.editable_settings[SettingsKeys.USE_TRANSLATE_TASK.value] and not english_only:
+    use_translate = app_settings.editable_settings[SettingsKeys.USE_TRANSLATE_TASK.value] if translate is None else translate
+    if use_translate and not english_only:
         generate_kwargs['task'] = 'translate'
     if language and not english_only:
         generate_kwargs['language'] = language
@@ -375,7 +377,7 @@ def _remove_silent_chunks(audio: np.ndarray):
 
 
 @utils.decorators.os_only(WINDOWS_LINUX)
-def _faster_whisper_transcribe_windows(audio, app_settings, language=None, prompt=None, info=None):
+def _faster_whisper_transcribe_windows(audio, app_settings, language=None, prompt=None, info=None, translate=None):
     """
     Transcribe audio using the Faster Whisper model.
 
@@ -402,7 +404,8 @@ def _faster_whisper_transcribe_windows(audio, app_settings, language=None, promp
             return f"Invalid {SettingsKeys.WHISPER_BEAM_SIZE.value} parameter. Please go into the advanced settings and ensure you have a integer greater than 0: {str(e)}"
 
         additional_kwargs = {}
-        if app_settings.editable_settings[SettingsKeys.USE_TRANSLATE_TASK.value]:
+        use_translate = app_settings.editable_settings[SettingsKeys.USE_TRANSLATE_TASK.value] if translate is None else translate
+        if use_translate:
             additional_kwargs["task"] = "translate"
 
         # Validate vad_filter
@@ -487,3 +490,18 @@ def set_whisper_model(model):
     """
     global stt_local_model
     stt_local_model = model
+
+def detect_language_probabilities(audio):
+    """
+    Whisper's own idea of the language of ``audio``: a list of ``(code, probability)``, most likely first.
+    ``None`` when this speech engine cannot say (the Mac engine, or a speech server).
+    """
+    model = stt_local_model
+    if model is None or model == WhisperModelStatus.ERROR or not hasattr(model, "detect_language"):
+        return None
+    try:
+        _, _, probabilities = model.detect_language(audio)
+    except Exception as e:
+        logger.warning(f"The language could not be detected: {e}")
+        return None
+    return sorted(((str(code), float(p)) for code, p in probabilities), key=lambda item: -item[1])
