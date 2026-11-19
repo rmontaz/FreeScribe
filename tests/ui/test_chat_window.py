@@ -54,6 +54,8 @@ def texts(panel):
         for child in widget.winfo_children():
             if isinstance(child, tk.Label) and child.cget("text"):
                 found.append(child.cget("text"))
+            elif isinstance(child, tk.Text) and child.get("1.0", "end-1c"):     # selectable message text
+                found.append(child.get("1.0", "end-1c"))
             walk(child)
     walk(panel.log.body)
     return found

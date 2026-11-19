@@ -49,6 +49,17 @@ Dictating into the chart
 - FreeScribe does the listening, with the microphone and speech-to-text set in FreeScribe
   (not Chrome's), so dictation can't be on while FreeScribe is recording a visit.
 
+Asking OSCAR's records from FreeScribe
+- In FreeScribe's sidebar, click "Ask OSCAR records" and ask, for example "How many
+  active patients have diabetes?". This chat is about all your patients, not one visit. The AI writes one read-only query (SELECT only, at most
+  1,000 rows) and shows it to you. Nothing runs until you press "Run in OSCAR".
+- An OSCAR page with this panel then runs it through OSCAR's own Query by Example report
+  (Admin > Reports), with your OSCAR login, so your OSCAR account needs access to that
+  report. The rows come back to the chat and the AI answers from them.
+- FreeScribe never connects to the database itself. Queries that could change anything are
+  refused before they reach OSCAR. Names and numbers in the rows are hidden from the AI the
+  same way as in the rest of the chat.
+
 Filling an eForm by talking
 - Open the eForm, then the panel's ... menu > "Fill this form by talking".
 - FreeScribe lists the form's boxes, then you press Start talking and say what goes in

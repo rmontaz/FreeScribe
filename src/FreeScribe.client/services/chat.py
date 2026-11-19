@@ -23,7 +23,7 @@ INSTRUCTIONS = (
     "support the clinician's judgement and do not replace it. Keep answers short and practical, in plain text."
 )
 SHORTENED = " [shortened]"
-ROLE_LABELS = {"user": "Clinician", "assistant": "Assistant", "event": "FreeScribe"}
+ROLE_LABELS = {"user": "Clinician", "assistant": "Assistant", "event": "FreeScribe", "query": "Query run on OSCAR"}
 
 # The smallest share of the budget kept for each part when something has to give
 MIN_TRANSCRIPT = 600

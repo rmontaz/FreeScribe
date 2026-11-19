@@ -186,8 +186,8 @@ function fsOriginOf(url) {
 
 // Registers the panel's scripts for ``origin`` (the site permission must be granted already)
 // and shows the panel in the tabs already open there.
-// The panel's scripts in the top window: dictation first, then the panel that offers it
-const FS_PANEL_FILES = ["voice.js", "panel.js"];
+// The panel's scripts in the top window: dictation, OSCAR queries, then the panel that offers it
+const FS_PANEL_FILES = ["voice.js", "oscar_query.js", "panel.js"];
 
 async function fsRegisterSite(origin) {
   const id = fsSiteId(origin);

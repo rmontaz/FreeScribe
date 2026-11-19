@@ -28,6 +28,7 @@ import logging
 from pathlib import Path
 import wave
 import threading
+import uuid
 import weakref
 import json
 import datetime
@@ -150,6 +151,7 @@ def on_closing():
     try:
         if storing_notes_locally():
             save_notes_history()
+            _save_records_chat()
         else:
             wipe_notes_history_file()
     except Exception as e:
@@ -239,14 +241,18 @@ def load_notes_history():
     workspace.reload_sessions()
 
 
-def wipe_notes_history_file():
-    """Empties the session history file."""
+def wipe_notes_history_file(records=True):
+    """Empties the session history file (and with ``records`` the OSCAR records chat's)."""
     notes_file_path = notes_history_path()
     try:
         if os.path.exists(notes_file_path):
             with open(notes_file_path, 'w') as file:
                 file.write("")  # Write an empty string to clear the file
             logger.info(f"Session history file cleared: {notes_file_path}")
+        records_path = records_chat_path()          # the OSCAR records chat is kept the same way
+        if records and os.path.exists(records_path):
+            with open(records_path, 'w') as file:
+                file.write("")
     except Exception as e:
         logger.exception(f"Error clearing session history file: {e}")
 
@@ -256,13 +262,16 @@ def clear_all_notes():
     Clears all sessions from the UI and the history file.
     """
     session_store.clear()
+    if _records_chat is not None:
+        _records_chat.chat = []
+        workspace.refresh_chat(_records_chat.id)
     wipe_notes_history_file()
     workspace.reload_sessions()
 
 
 def on_sessions_cleared():
-    """Called after the user deleted every session from the sidebar."""
-    wipe_notes_history_file()
+    """Called after the user deleted every session from the sidebar (the OSCAR records chat stays)."""
+    wipe_notes_history_file(records=False)
 
 
 def schedule_notes_save():
@@ -2729,11 +2738,15 @@ def refresh_chat_window(session_id):
 
 
 def _clear_chat(session):
-    if messagebox.askyesno("Clear chat", "Delete this session's chat? This cannot be undone."):
+    records = session is records_chat()
+    question = ("Delete the OSCAR records chat?" if records else "Delete this session's chat?")
+    if messagebox.askyesno("Clear chat", question + " This cannot be undone."):
+        for message in session.chat:
+            if message.get("role") == "query":
+                oscar_queries.cancel(message.get("id", ""))
         session.chat = []
         session.touch()
-        if storing_notes_locally():
-            save_notes_history()
+        _save_chat()
 
 
 def open_chat():
@@ -2741,11 +2754,13 @@ def open_chat():
     workspace.flush_edits()
     if workspace.current is None:
         return
-    workspace.toggle_chat(on_send=send_chat_message, on_clear=_clear_chat)
+    workspace.toggle_chat(on_send=send_chat_message, on_clear=_clear_chat, on_query=oscar_query_action)
 
 
-def send_chat_message(session, text):
+def send_chat_message(session, text, oscar=False):
     """Sends a chat message with the session as context and shows the reply."""
+    if oscar:
+        return ask_oscar(session, text)
     panel = workspace.chat_panel
     workspace.flush_edits()
     history = list(session.chat)
@@ -2799,6 +2814,391 @@ def _chat_thread(session, prompt_text, mapping):
             save_notes_history()
 
     run_on_ui(finish)
+
+
+# ------------------------------------------------------------------ asking OSCAR's records
+# The AI writes one read-only SELECT for the clinician's question; the clinician checks it and
+# presses Run; an OSCAR page with the FreeScribe panel runs it through OSCAR's own "Query by
+# Example" report with the clinician's login, and the AI answers from the rows
+# (services/oscar_query.py). FreeScribe never connects to the database itself.
+def _save_chat():
+    if storing_notes_locally():
+        save_notes_history()
+        _save_records_chat()
+
+
+# The OSCAR records chat (sidebar: "Ask OSCAR records") belongs to no visit. It is kept like the
+# sessions: in memory, and on disk encrypted only when sessions are kept on this computer.
+_records_chat = None
+
+
+def records_chat_path():
+    return get_resource_path('oscar_records_chat.txt')
+
+
+def records_chat():
+    global _records_chat
+    if _records_chat is None:
+        from services.sessions import Session
+        _records_chat = Session(title="OSCAR records")
+        path = records_chat_path()
+        if storing_notes_locally() and os.path.exists(path):
+            try:
+                with open(path, "r") as file:
+                    data = file.read().strip()
+                if data:
+                    _records_chat = Session.from_dict(json.loads(AESCryptoUtils.AESCryptoUtilsClass.decrypt(data)))
+            except Exception as e:
+                logger.exception(f"The OSCAR records chat could not be read: {e}")
+    return _records_chat
+
+
+def _save_records_chat():
+    if _records_chat is None:
+        return
+    path = records_chat_path()
+    try:
+        data = (AESCryptoUtils.AESCryptoUtilsClass.encrypt(json.dumps(_records_chat.to_dict()))
+                if _records_chat.chat else "")
+        temp = path + ".tmp"
+        with open(temp, "w") as file:
+            file.write(data)
+        os.replace(temp, path)
+    except Exception as e:
+        logger.exception(f"The OSCAR records chat could not be saved: {e}")
+
+
+def open_oscar_records():
+    """Shows or hides the OSCAR records chat (questions about all patients, not the open visit)."""
+    workspace.flush_edits()
+    panel = workspace.toggle_chat(on_send=send_chat_message, on_clear=_clear_chat, on_query=oscar_query_action,
+                                  records=records_chat(), on_learn=learn_oscar)
+    if panel is not None:
+        panel.set_profile_note(_profile_note())
+
+
+def _counts_only():
+    panel = workspace.chat_panel
+    try:
+        return bool(panel.counts_only.get()) if panel is not None else True
+    except Exception:
+        return True
+
+
+# What this clinic's OSCAR looks like (the names and codes it uses, which tables hold data), from
+# count-only queries ("Learn this OSCAR"). Totals only, so it is kept as plain JSON.
+_discovery = {}          # query id -> discovery key, while learning
+_discovery_results = {}
+
+
+def oscar_profile_path():
+    return get_resource_path('oscar_profile.json')
+
+
+def _oscar_profile():
+    try:
+        with open(oscar_profile_path(), "r", encoding="utf-8") as file:
+            data = json.load(file)
+        return data if isinstance(data, dict) and isinstance(data.get("results"), dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def _oscar_profile_text():
+    from services import oscar_query
+    profile = _oscar_profile()
+    return oscar_query.profile_text(profile["results"]) if profile else ""
+
+
+def _profile_note():
+    if _discovery:
+        return "Learning this OSCAR…"
+    profile = _oscar_profile()
+    if not profile:
+        return "This OSCAR hasn't been learned yet: press Learn this OSCAR for better queries."
+    try:
+        when = datetime.datetime.fromisoformat(profile.get("checked", "")).strftime("%b %d, %Y")
+    except ValueError:
+        when = "earlier"
+    return f"Learned this OSCAR's labels {when}."
+
+
+def learn_oscar(session):
+    """Run the count-only queries that show how this OSCAR records things (see oscar_query.DISCOVERY)."""
+    from services import oscar_query
+    if _discovery:
+        return
+    if extension_server is None:
+        session.add_chat("event", "Turn on the Chrome extension connection in FreeScribe (sidebar: Chrome "
+                                  "extension), keep an OSCAR page open in Chrome, then press Learn this OSCAR again.")
+        session.chat[-1]["icon"] = "database"
+        workspace.refresh_chat(session.id)
+        return
+    _discovery_results.clear()
+    for key, _title, sql in oscar_query.DISCOVERY:
+        _discovery[oscar_queries.add(sql)] = (key, session)
+    message = session.add_chat("event", f"Learning how this OSCAR records things: {len(oscar_query.DISCOVERY)} "
+                                        "count-only queries (no names or numbers) run in OSCAR with your login. "
+                                        "Keep an OSCAR page with the FreeScribe panel open in Chrome.")
+    message["icon"] = "database"
+    workspace.refresh_chat(session.id)
+    if workspace.chat_panel is not None:
+        workspace.chat_panel.set_profile_note(_profile_note())
+    _save_chat()
+
+
+def _discovery_result(query_id, columns, rows, error):
+    """One learning query came back; when all have, save what was learned."""
+    from services import oscar_query
+    key, session = _discovery.pop(query_id)
+    _discovery_results[key] = {"columns": columns, "rows": rows, "error": error}
+    if _discovery:
+        return
+    results = dict(_discovery_results)
+    # A check that failed this time keeps what an earlier run learned
+    earlier = (_oscar_profile() or {}).get("results", {})
+    kept = [k for k, r in results.items() if r["error"] and earlier.get(k) and not earlier[k].get("error")]
+    for key in kept:
+        results[key] = earlier[key]
+    worked = [k for k, r in results.items() if not r["error"]]
+    if not worked:
+        first = next(iter(results.values()), {}).get("error", "")
+        session.add_chat("event", f"Couldn't learn this OSCAR: {first or 'no answer'}. Your OSCAR login needs "
+                                  "access to Admin > Reports > Query by Example.")
+    else:
+        try:
+            with open(oscar_profile_path(), "w", encoding="utf-8") as file:
+                json.dump({"checked": datetime.datetime.now().isoformat(timespec="seconds"),
+                           "results": results}, file, indent=1)
+        except OSError as e:
+            logger.exception(f"The OSCAR profile could not be saved: {e}")
+        missing = [title for k, title, _ in oscar_query.DISCOVERY if results.get(k, {}).get("error")]
+        if kept:
+            text_kept = f" {len(kept)} check{'s' if len(kept) != 1 else ''} failed this time; kept what was learned before."
+        else:
+            text_kept = ""
+        text = (f"Learned this OSCAR's labels ({len(worked)} of {len(results)} checks worked). Queries now use "
+                "its own measurement names, codes and statuses.")
+        text += text_kept
+        if missing:
+            first_error = next((results[k]["error"] for k, _t, _s in oscar_query.DISCOVERY
+                                if results.get(k, {}).get("error")), "")
+            text += " Not available: " + "; ".join(missing) + f" ({first_error[:140]})."
+        session.add_chat("event", text)
+    session.chat[-1]["icon"] = "database"
+    session.touch()
+    workspace.refresh_chat(session.id)
+    if workspace.chat_panel is not None:
+        workspace.chat_panel.set_profile_note(_profile_note())
+    _save_chat()
+
+
+def _find_query(query_id):
+    """(session, message) of the chat query with ``query_id``, or (None, None)."""
+    for session in [records_chat()] + list(session_store.sessions):
+        for message in session.chat:
+            if message.get("role") == "query" and message.get("id") == query_id:
+                return session, message
+    return None, None
+
+
+def ask_oscar(session, question):
+    """The AI writes a query for ``question``; it is shown in the chat for the clinician to run."""
+    from services import oscar_query
+    panel = workspace.chat_panel
+    workspace.flush_edits()
+    session.add_chat("user", question)
+    if panel is not None:
+        panel.refresh(session.id)
+    _save_chat()
+    counts_only = _counts_only()
+    # The usual questions get a ready-made, tested query (no AI needed); the rest go to the AI
+    from services import oscar_recipes
+    try:
+        recipe = oscar_recipes.recipe_for(question, _oscar_profile(), counts_only=counts_only,
+                                          clinician=clinician_profile())
+    except Exception as e:
+        logger.exception(f"Ready-made OSCAR query failed: {e}")
+        recipe = None
+    if recipe is not None and recipe.problem:
+        session.add_chat("assistant", recipe.problem)
+        if panel is not None:
+            panel.refresh(session.id)
+        _save_chat()
+        return
+    if recipe is not None:
+        message = session.add_chat("query", recipe.sql)
+        message.update(id=uuid.uuid4().hex[:12], question=question, state="proposed", explain=recipe.explain,
+                       counts_only=recipe.counts, source="recipe")
+        try:
+            message["text"] = oscar_query.check_sql(recipe.sql, counts_only=recipe.counts)
+        except oscar_query.QueryError as e:
+            message.update(state="refused", error=f"Not run: {e}")
+        session.touch()
+        if panel is not None:
+            panel.refresh(session.id)
+        _save_chat()
+        return
+    prompt = oscar_query.sql_prompt(question, profile=_oscar_profile_text(), counts_only=counts_only)
+    hidden, mapping = form_filler.pseudonymize(prompt)
+
+    def start(prompt_text):
+        if panel is not None:
+            panel.set_busy(session.id, True)
+        threading.Thread(target=_oscar_sql_thread, args=(session, question, prompt_text, mapping, counts_only),
+                         daemon=True).start()
+
+    def cancelled():
+        if panel is not None:
+            panel.set_busy(session.id, False, "Not sent.")
+
+    if needs_phi_review():
+        ScrubWindow(root, hidden, start, cancelled)
+    else:
+        start(hidden)
+
+
+def _oscar_sql_thread(session, question, prompt_text, mapping, counts_only=False):
+    from services import oscar_query
+    try:
+        reply = send_text_to_chatgpt(prompt_text)
+        error = describe_llm_error(reply) if is_llm_error(reply) else None
+    except Exception as e:
+        logger.exception(f"OSCAR query request failed: {e}")
+        reply, error = "", str(e)
+
+    def finish():
+        panel = workspace.chat_panel
+        if error:
+            if panel is not None:
+                panel.show_error(session.id, f"No query: {error}")
+            return
+        reply_text = form_filler.restore(reply, mapping)
+        sql = oscar_query.extract_sql(reply_text)
+        if not sql:
+            session.add_chat("assistant", "That can't be answered from OSCAR's records with a query. "
+                                          "Try asking about patients, appointments, prescriptions, "
+                                          "allergies, diagnoses, measurements or preventions.")
+        else:
+            message = session.add_chat("query", sql)
+            message.update(id=uuid.uuid4().hex[:12], question=question, state="proposed",
+                           explain=oscar_query.extract_explanation(reply_text), counts_only=counts_only, source="ai")
+            try:
+                message["text"] = oscar_query.check_sql(sql, counts_only=counts_only)
+            except oscar_query.QueryError as e:
+                message.update(state="refused", error=f"Not run: {e}")
+        if panel is not None:
+            panel.set_busy(session.id, False)
+        _save_chat()
+
+    run_on_ui(finish)
+
+
+def oscar_query_action(session, message, action):
+    """Run or cancel a query card in the chat."""
+    from services import oscar_query
+    if action == "run" and message.get("state") == "proposed":
+        if extension_server is None:
+            message.update(state="failed", error="Turn on the Chrome extension connection in FreeScribe "
+                                                 "(sidebar: Chrome extension), then ask again.")
+        else:
+            try:
+                qid = oscar_queries.add(message.get("text", ""), counts_only=bool(message.get("counts_only")))
+                message.update(id=qid, state="waiting", error="", note="")
+                root.after(10000, lambda: _check_waiting(session, message))
+            except oscar_query.QueryError as e:
+                message.update(state="refused", error=f"Not run: {e}")
+    elif action == "cancel" and message.get("state") in ("proposed", "waiting", "running"):
+        oscar_queries.cancel(message.get("id", ""))
+        message.update(state="cancelled", error="")
+    session.touch()
+    workspace.refresh_chat(session.id)
+    _save_chat()
+
+
+def _check_waiting(session, message):
+    """Still waiting after 10 seconds and no OSCAR page has checked in: say what to do."""
+    if message.get("state") != "waiting":
+        return
+    if time.time() - _last_extension_poll > 8:
+        message["note"] = ("No OSCAR page with the FreeScribe panel is connected. Open OSCAR in Chrome: the "
+                           "panel's button at the side of the page should be green, not grey. If it stays grey, "
+                           "check “Chrome extension” in FreeScribe's sidebar and the pairing code.")
+    else:
+        message["note"] = "An OSCAR page is connected; the query starts when the one before it has finished."
+    workspace.refresh_chat(session.id)
+    root.after(15000, lambda: _check_waiting(session, message))
+
+
+def _oscar_claimed(payload):
+    """The extension took a query: show it as running (then pass the request to the queue)."""
+    reply = oscar_queries.handle(payload)
+    if payload.get("action") == "claim" and reply.get("ok"):
+        def running():
+            session, message = _find_query(str(payload.get("id", "")))
+            if message is not None and message.get("state") == "waiting":
+                message["state"] = "running"
+                workspace.refresh_chat(session.id)
+        run_on_ui(running)
+    return reply
+
+
+def _oscar_result(query_id, columns, rows, error):
+    """Rows (or an error) came back from OSCAR: show them, then have the AI answer the question."""
+    if query_id in _discovery:
+        run_on_ui(lambda: _discovery_result(query_id, columns, rows, error) if query_id in _discovery else None)
+        return
+
+    def show():
+        from services import oscar_query
+        session, message = _find_query(query_id)
+        if message is None or message.get("state") not in ("waiting", "running"):
+            return
+        if error:
+            message.update(state="failed", error=f"OSCAR could not run it: {error}")
+        else:
+            message.update(state="done", columns=columns, rows=rows, error="")
+        session.touch()
+        workspace.refresh_chat(session.id)
+        _save_chat()
+        if error:
+            return
+        if message.get("source") == "recipe":
+            from services import oscar_recipes
+            named_columns, named_rows = oscar_recipes.name_providers(columns, rows,
+                                                                     oscar_recipes.known_providers(_oscar_profile()))
+            if named_columns != list(columns):
+                message.update(columns=named_columns, rows=named_rows)
+                workspace.refresh_chat(session.id)
+            session.add_chat("assistant", oscar_recipes.answer(named_columns, named_rows, message.get("explain", "")))
+            session.touch()
+            workspace.refresh_chat(session.id)
+            _save_chat()
+            return
+        prompt = oscar_query.answer_prompt(message.get("question", ""), message.get("text", ""), columns, rows,
+                                           explain=message.get("explain", ""))
+        hidden, mapping = form_filler.pseudonymize(prompt)
+        panel = workspace.chat_panel
+
+        def start(prompt_text):
+            if panel is not None:
+                panel.set_busy(session.id, True)
+            threading.Thread(target=_chat_thread, args=(session, prompt_text, mapping), daemon=True).start()
+
+        if needs_phi_review():
+            ScrubWindow(root, hidden, start, lambda: panel is not None and panel.set_busy(session.id, False))
+        else:
+            start(hidden)
+
+    run_on_ui(show)
+
+
+def _make_oscar_queue():
+    from services.oscar_query import QueryQueue
+    return QueryQueue(_oscar_result)
+
+
+oscar_queries = _make_oscar_queue()
 
 
 # The bundled OSCAR eForm Mapper, served on this computer only while FreeScribe runs
@@ -3106,8 +3506,13 @@ extension_server = None
 extension_server_error = ""
 
 
+_last_extension_poll = 0.0       # when an OSCAR page with the panel last asked FreeScribe for its status
+
+
 def _extension_state():
     from services.browser_control import AppState
+    global _last_extension_poll
+    _last_extension_poll = time.time()
     session = workspace.current
     return AppState(
         recording=bool(is_recording), paused=bool(is_paused), busy=workspace.busy_text or "",
@@ -3118,6 +3523,7 @@ def _extension_state():
         seconds=workspace.recording_seconds() if session else 0.0,
         question=current_question(),
         template=_safe_template_state(),
+        oscar_query=oscar_queries.next(),
         error=(workspace.warning_text or "") if getattr(workspace, "warning_kind", None) == "error" else "")
 
 
@@ -3257,9 +3663,10 @@ def start_extension_server():
                          "/api/patient": control.patient, "/api/session": control.session,
                          "/api/dictate": voice.dictate, "/api/eform": voice.eform,
                          "/api/attention": _extension_attention, "/api/note_for": control.note_for,
-                         "/api/inserted": _extension_inserted, "/api/template": _extension_template},
+                         "/api/inserted": _extension_inserted, "/api/template": _extension_template,
+                         "/api/oscar_query": _oscar_claimed},
             user_errors=(ControlError, VoiceError),
-            body_limits={"/api/eform": 25 * 1024 * 1024},
+            body_limits={"/api/eform": 25 * 1024 * 1024, "/api/oscar_query": 20 * 1024 * 1024},
             bound_origin=lambda: str(settings.get(SettingsKeys.BROWSER_EXTENSION_ORIGIN.value) or ""),
             bind_origin=_bind_extension_origin)
     try:
@@ -3356,6 +3763,7 @@ workspace = Workspace(
         "fill_form": fill_form,
         "open_chat": open_chat,
         "open_translate": open_translate,
+        "open_oscar_records": open_oscar_records,
         "find_drug_flags": find_drug_flags,
         "open_eform_mapper": open_eform_mapper,
         "open_browser_extension": open_browser_extension,

@@ -76,7 +76,7 @@ def workspace(root, tmp_path, monkeypatch):
 
     calls = []
     names = ("toggle_recording", "resume_recording", "toggle_pause", "generate", "upload", "ask",
-             "generate_document", "fill_form", "open_chat", "third_party_notices", "toggle_view", "open_settings",
+             "generate_document", "fill_form", "open_chat", "open_oscar_records", "third_party_notices", "toggle_view", "open_settings",
              "sessions_changed",
              "sessions_cleared")
     actions = {name: (lambda *args, name=name: calls.append((name, args))) for name in names}
@@ -748,3 +748,10 @@ def test_translate_has_a_sidebar_entry_in_the_tools(root, tmp_path, monkeypatch)
     ws.translate_button.invoke()
     assert calls == ["open_translate"]
     ws.frame.destroy()
+
+
+def test_ask_oscar_records_is_in_the_beta_group_and_asks_first(root, workspace):
+    assert workspace.records_button.master is workspace.beta_frame
+    workspace.set_beta_notice_hidden(True)
+    workspace.records_button.invoke()
+    assert ("open_oscar_records", ()) in workspace.calls

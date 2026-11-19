@@ -286,6 +286,7 @@ class Workspace:
         self._busy_phase = 0
         self._status_rows = []
         self.chat_panel = None
+        self.records_chat = None         # the OSCAR records chat while the panel shows it (None: a visit's chat)
         self._ignored_words = set()      # words the clinician confirmed are right
 
         self._build()
@@ -351,7 +352,7 @@ class Workspace:
 
     def _build_beta_group(self, footer, bg):
         """Features still being developed sit together under "Beta testing", behind one notice."""
-        names = ("open_chat", "fill_form", "ask_oscar")
+        names = ("open_chat", "fill_form", "open_oscar_records")
         if not any(name in self.actions for name in names):
             return
         group = tk.Frame(footer, bg=bg)
@@ -364,11 +365,11 @@ class Workspace:
                                        command=lambda: self._open_beta("open_chat"),
                                        tooltip="Ask the AI about the open session (beta)")
             self.chat_button.pack(fill="x")
-        if "ask_oscar" in self.actions:
-            self.ask_oscar_button = ToolRow(group, "Ask OSCAR records", "search", Palette.INFO, Palette.INFO_SOFT,
-                                            command=lambda: self._open_beta("ask_oscar"),
+        if "open_oscar_records" in self.actions:
+            self.records_button = ToolRow(group, "Ask OSCAR records", "database", Palette.INFO, Palette.INFO_SOFT,
+                                            command=lambda: self._open_beta("open_oscar_records"),
                                             tooltip="Ask questions about the records in OSCAR (beta)")
-            self.ask_oscar_button.pack(fill="x")
+            self.records_button.pack(fill="x")
         if "fill_form" in self.actions:
             self.fill_form_button = ToolRow(group, "Fill PDF form", "form", "#9A4A12", "#FEEBDD",
                                             command=lambda: self._open_beta("fill_form"),
@@ -991,25 +992,33 @@ class Workspace:
     def chat_visible(self) -> bool:
         return self.chat_panel is not None and bool(self.chat_panel.frame.winfo_manager())
 
-    def toggle_chat(self, on_send, on_clear=None):
-        """Show the chat panel for the open session, or hide it if it is showing."""
-        if self.chat_visible():
+    def toggle_chat(self, on_send, on_clear=None, on_query=None, records=None, on_learn=None):
+        """
+        Show the chat panel for the open session, or with ``records`` (a session holding the OSCAR
+        records chat) that chat instead. Pressing the same tool again hides the panel.
+        """
+        if self.chat_visible() and (self.records_chat is None) == (records is None):
             self.hide_chat()
             return None
-        return self.show_chat(on_send, on_clear)
+        return self.show_chat(on_send, on_clear, on_query, records, on_learn)
 
-    def show_chat(self, on_send, on_clear=None):
+    def show_chat(self, on_send, on_clear=None, on_query=None, records=None, on_learn=None):
         if self.chat_panel is None:
-            self.chat_panel = ChatPanel(self.full, on_send, on_clear, on_close=self.hide_chat)
+            self.chat_panel = ChatPanel(self.full, on_send, on_clear, on_close=self.hide_chat, on_query=on_query,
+                                        on_learn=on_learn)
             self._chat_border = tk.Frame(self.full, bg=Palette.BORDER, width=1)
+        elif on_learn is not None:
+            self.chat_panel.on_learn = on_learn
         if not self.chat_visible():
             self.chat_panel.frame.pack(side="right", fill="y", before=self.main)
             self._chat_border.pack(side="right", fill="y", before=self.main)
-        self.chat_panel.set_session(self.current)
+        self.records_chat = records
+        self.chat_panel.set_session(records if records is not None else self.current, records=records is not None)
         self.chat_panel.focus()
         return self.chat_panel
 
     def hide_chat(self):
+        self.records_chat = None
         if self.chat_visible():
             self.chat_panel.frame.pack_forget()
             self._chat_border.pack_forget()
@@ -1083,7 +1092,7 @@ class Workspace:
         self._restore_template(session)
         self._refresh_meta()
         self.hide_warning(kind="negatives")
-        if self.chat_visible():
+        if self.chat_visible() and self.records_chat is None:      # the records chat stays put
             self.chat_panel.set_session(session)
         for session_id, row in self._rows.items():
             row.set_selected(session_id == session.id)

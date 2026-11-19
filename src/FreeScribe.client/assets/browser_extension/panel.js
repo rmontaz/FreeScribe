@@ -280,6 +280,7 @@ kbd { font: 600 10.5px system-ui, sans-serif; padding: 1px 5px; border-radius: 5
   let guard = null;
   let chartNote = null;          // FreeScribe's answer for this page's chart (see note_for)
   let noteOwner = "";            // whose note the panel shows              // Insert was stopped: the chart is another patient's {chart, session}      // the note template list is open
+  let oscarQuery = "";           // the id of the chat query this page is running in OSCAR ("" when none)
   const tplName = (n) => String(n || "").replace(/ - Default$/, "");
   // "1.10.0" is newer than "1.9.2"
   const newer = (a, b) => {
@@ -430,12 +431,41 @@ kbd { font: 600 10.5px system-ui, sans-serif; padding: 1px 5px; border-radius: 5
         seenQuestion = q.id;
         if (place.collapsed) { place.collapsed = false; opening = true; }
       }
+      if (status.oscar_query && !oscarQuery) runOscarQuery(status.oscar_query);
     } else {
       status = null;
       problem = { kind: reply.kind, message: reply.error };
     }
     try { render(); } catch (error) { console.warn("FreeScribe panel:", error); }
     schedule();
+  }
+
+  // A query the clinician approved in FreeScribe's chat: one OSCAR page takes it, runs it through
+  // OSCAR's Query by Example report with this login (oscar_query.js) and sends back the rows
+  async function runOscarQuery(query) {
+    if (typeof window.__fsOscarQuery !== "function") return;
+    oscarQuery = query.id;
+    try {
+      // A tab in view takes it first; a hidden one (or a window behind FreeScribe) a moment later
+      if (document.hidden) await new Promise((r) => setTimeout(r, 2500));
+      const claim = await send({ fs: "call", path: "/api/oscar_query", body: { action: "claim", id: query.id } });
+      if (!claim.ok || !claim.data || !claim.data.ok) return;          // another OSCAR page took it
+      say("Running FreeScribe's query in OSCAR (read-only)…", "", 0);
+      let body;
+      try {
+        const result = await window.__fsOscarQuery(claim.data.sql);
+        body = { action: "result", id: query.id, columns: result.columns, rows: result.rows };
+      } catch (error) {
+        body = { action: "result", id: query.id, error: (error && error.message) || "The query could not be run." };
+      }
+      await send({ fs: "call", path: "/api/oscar_query", body });
+      say(body.error ? `The query could not run: ${body.error}` : "Query done: the answer is in FreeScribe's chat.",
+        body.error ? "warn" : "ok", body.error ? 9000 : 6000);
+    } finally {
+      oscarQuery = "";
+      clearTimeout(pollTimer);
+      pollTimer = setTimeout(refresh, 150);      // the next query (if any) without waiting for the poll
+    }
   }
 
   function schedule() {

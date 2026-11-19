@@ -235,6 +235,16 @@ class Session:
         for raw in data.get("chat") or []:
             if isinstance(raw, dict) and raw.get("role") in ("user", "assistant", "event") and raw.get("text"):
                 chat.append({"role": raw["role"], "text": str(raw["text"]), "time": str(raw.get("time") or "")})
+            elif isinstance(raw, dict) and raw.get("role") == "query" and raw.get("text"):
+                # A query of OSCAR's records (services/oscar_query.py): its SQL is the text
+                entry = {k: raw.get(k) for k in ("role", "text", "time", "id", "question", "state", "error",
+                                                 "columns", "rows")}
+                entry["state"] = str(entry.get("state") or "proposed")
+                if entry["state"] in ("waiting", "running"):
+                    entry["state"], entry["error"] = "failed", "FreeScribe was closed before OSCAR answered."
+                entry["columns"] = [str(c) for c in (raw.get("columns") or [])]
+                entry["rows"] = [[str(c) for c in row] for row in (raw.get("rows") or []) if isinstance(row, list)]
+                chat.append(entry)
         try:
             duration = float(data.get("duration") or 0)
         except (TypeError, ValueError):

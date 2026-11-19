@@ -333,6 +333,18 @@ def _form(p):
     p.line((9, 14.5), (11.4, 16.9), (15.8, 12.4))
 
 
+def _database(p):
+    import math as _m
+
+    def lower(cy):          # the front half of the ellipse at height cy
+        return [(12 + 7.5 * _m.cos(_m.radians(a)), cy + 2.6 * _m.sin(_m.radians(a))) for a in range(0, 181, 15)]
+    p.ellipse(12, 6, 7.5, 2.6)
+    p.line((4.5, 6), (4.5, 18))
+    p.line((19.5, 6), (19.5, 18))
+    p.line(*lower(12))
+    p.line(*lower(18))
+
+
 def _mapper(p):
     p.rrect(4, 4, 20, 20, 2.5)
     p.line((8, 9), (16, 9))
@@ -341,7 +353,7 @@ def _mapper(p):
 
 
 _ICONS = {
-    "chat": _chat, "form": _form, "mapper": _mapper,
+    "chat": _chat, "form": _form, "mapper": _mapper, "database": _database,
     "mic": _mic, "stop": _stop, "pause": _pause, "play": _play, "record": _record,
     "plus": _plus, "search": _search, "settings": _settings, "help": _help, "info": _info,
     "copy": _copy, "check": _check, "close": _close,

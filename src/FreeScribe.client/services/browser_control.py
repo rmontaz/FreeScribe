@@ -59,6 +59,9 @@ class AppState:
     question: Optional[dict] = None
     error: str = ""                 # the error shown in the app's banner ("" when none)
     template: Optional[dict] = None # {"current", "default", "options"}: the note template, None when unknown
+    # A read-only query of OSCAR's records the clinician approved in the chat, waiting for an OSCAR page
+    # to run it: {"id": ..., "sql": ...}; None when there is none
+    oscar_query: Optional[dict] = None
 
 
 def note_for_emr(note: str) -> str:
@@ -119,6 +122,7 @@ class VisitControl:
             "question": s.question or None,
             "error": s.error or "",
             "template": s.template or None,
+            "oscar_query": s.oscar_query or None,
             "notes": self.todays_notes(),
             "session": {
                 "id": s.session_id,
