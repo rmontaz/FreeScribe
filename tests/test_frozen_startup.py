@@ -30,4 +30,4 @@ def test_unattended_runs_skip_start_up_questions():
     text = CLIENT.read_text(encoding="utf-8")
     assert 'os.environ.get("FREESCRIBE_UNATTENDED") == "1"' in text
     assert "and not UNATTENDED:\n    popup_box = PopupBox" in text
-    assert "and not UNATTENDED:\n    window.show_welcome_message()" in text
+    assert "and not UNATTENDED:\n        window.show_welcome_message()" in text

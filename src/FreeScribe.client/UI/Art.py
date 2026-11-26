@@ -222,6 +222,11 @@ class StartupSplash(Artwork):
         self.create_text(w/2,h*.51,text=self.status_text,width=w*.68,justify='center',font=Theme.font('base'),fill='#d0e5e3',tags='brand')
         self.create_text(w/2,h*.61,text=self.status_note,width=w*.68,justify='center',font=Theme.font('small'),fill='#bdd0d3',tags='brand')
         if self.cancellable:
-            self.create_text(w/2,h*.74,text='Cancel loading',font=Theme.font('small'),fill='#fff4df',tags=('brand','cancel'))
+            label = self.create_text(w/2,h*.74,text='Cancel loading',font=Theme.font('small'),fill='#fff4df',tags=('brand','cancel'))
+            x0,y0,x1,y1 = self.bbox(label)
+            pad = Theme.px(10)
+            self.create_rectangle(x0-pad,y0-Theme.px(5),x1+pad,y1+Theme.px(5),fill='#0f2a35',outline='#5aa9a0',tags=('brand','cancel'))
+            self.tag_raise(label)
+            self.configure(cursor='arrow')
             self.tag_bind('cancel','<Button-1>',lambda event: self.on_cancel() if self.on_cancel else None)
         self.tag_raise('progress')

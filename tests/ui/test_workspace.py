@@ -407,9 +407,11 @@ def test_compact_view_round_trip(root, workspace):
 
 def test_settings_lock(workspace):
     workspace.set_settings_enabled(False)
-    assert not workspace.settings_button.enabled
+    workspace.menubar.refresh()
+    assert not workspace.menubar.enabled("settings")
     workspace.set_settings_enabled(True)
-    assert workspace.settings_button.enabled
+    workspace.menubar.refresh()
+    assert workspace.menubar.enabled("settings")
 
 
 def test_template_choice_is_reflected(root, workspace):
@@ -514,9 +516,7 @@ def test_chat_panel_docks_and_follows_the_session(root, workspace):
 
 def test_help_menu_lists_third_party_licences(workspace):
     from UI.Widgets import Controls
-    workspace._open_help_menu()
-    item = next(i for i in Controls.popup_menu.last_items if i and i["label"] == "Third-party licences")
-    item["command"]()
+    workspace.menubar.invoke("licences")
     assert ("third_party_notices", ()) in workspace.calls
 
 
@@ -732,7 +732,7 @@ def test_patient_from_the_chart_can_be_switched_and_unlinked(root, workspace):
     assert session.title == "Priya - follow-up"
 
 
-def test_translate_has_a_sidebar_entry_in_the_tools(root, tmp_path, monkeypatch):
+def test_translate_is_in_the_beta_group(root, tmp_path, monkeypatch):
     # The fixture's actions do not include it, so build a workspace that does
     from UI.Widgets import Controls
     from UI.Workspace import Workspace
@@ -743,8 +743,9 @@ def test_translate_has_a_sidebar_entry_in_the_tools(root, tmp_path, monkeypatch)
                "open_translate": lambda: calls.append("open_translate"), "open_chat": lambda: None}
     ws = Workspace(root, SessionStore(), actions, ui_state=FakeState(), mic=FakeMic(), version="vTest")
     pump(root)
-    assert ws.translate_button.master is ws.tools_frame            # a tool, not a beta feature
+    assert ws.translate_button.master is ws.beta_frame             # still being tested, so it sits with the beta tools
     assert ws.chat_button.master is ws.beta_frame
+    ws.set_beta_notice_hidden(True)
     ws.translate_button.invoke()
     assert calls == ["open_translate"]
     ws.frame.destroy()

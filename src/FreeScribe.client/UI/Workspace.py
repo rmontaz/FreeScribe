@@ -83,8 +83,8 @@ def session_status(session, recording=False):
 class ToolRow(tk.Canvas):
     """A sidebar tool: a coloured icon tile and a label, the whole row clickable."""
 
-    HEIGHT = 42
-    ART = 34              # the picture or icon tile, centred in a box of this size
+    HEIGHT = 38
+    ART = 32              # the picture or icon tile, centred in a box of this size
 
     def __init__(self, parent, text, icon_name, tint, tile, command, tooltip=None, surface=None):
         surface = surface or Palette.SIDEBAR
@@ -309,6 +309,8 @@ class Workspace:
         self.select_session(self._blank_session())
         self._rebuild_session_list()
         self._bind_shortcuts()
+        from UI.MenuBar import MenuBar
+        self.menubar = MenuBar(self)       # File, Edit, View, Session, Tools and Help
         if mic is not None:
             mic.add_listener(self._refresh_mic)
         self._refresh_mic()
@@ -368,7 +370,7 @@ class Workspace:
 
     def _build_beta_group(self, footer, bg):
         """Features still being developed sit together under "Beta testing", behind one notice."""
-        names = ("open_chat", "fill_form", "open_oscar_records")
+        names = ("open_chat", "fill_form", "open_oscar_records", "open_translate")
         if not any(name in self.actions for name in names):
             return
         group = tk.Frame(footer, bg=bg)
@@ -391,6 +393,12 @@ class Workspace:
                                             command=lambda: self._open_beta("fill_form"),
                                             tooltip="Fill a PDF form from the session, or by talking it through (beta)")
             self.fill_form_button.pack(fill="x")
+        if "open_translate" in self.actions:
+            self.translate_button = ToolRow(group, "Translate", "translate", "#0F766E", "#DDF3F0",
+                                            command=lambda: self._open_beta("open_translate"),
+                                            tooltip="Talk with someone in another language: what is said and its "
+                                                    "translation, large enough to show them (beta)")
+            self.translate_button.pack(fill="x")
 
     def beta_notice_hidden(self):
         return bool(self.ui_state is not None and self.ui_state.get(self.BETA_NOTICE_KEY, False))
@@ -491,15 +499,9 @@ class Workspace:
         tools = tk.Frame(side, bg=bg)
         tools.pack(fill="x", padx=Theme.px(8), pady=(Theme.px(8), 0))
         self.tools_frame = tools
-        if any(name in self.actions for name in ("open_translate", "open_eform_mapper", "open_browser_extension")):
+        if any(name in self.actions for name in ("open_eform_mapper", "open_browser_extension")):
             tk.Label(tools, text="TOOLS", bg=bg, fg=Palette.TEXT_FAINT, font=Theme.font("micro", "semibold"),
                      anchor="w").pack(fill="x", padx=Theme.px(4), pady=(Theme.px(4), Theme.px(2)))
-        if "open_translate" in self.actions:
-            self.translate_button = ToolRow(tools, "Translate", "translate", "#0F766E", "#DDF3F0",
-                                            command=lambda: self._act("open_translate"),
-                                            tooltip="Talk with someone in another language: what is said and its "
-                                                    "translation, large enough to show them")
-            self.translate_button.pack(fill="x")
         if "open_eform_mapper" in self.actions:
             self.mapper_button = ToolRow(tools, "eForm mapper", "mapper", Palette.INFO, Palette.INFO_SOFT,
                                          command=lambda: self._act("open_eform_mapper"),
@@ -531,28 +533,11 @@ class Workspace:
                  font=Theme.font("micro"), anchor="w").pack(fill="x", padx=Theme.px(18), pady=(Theme.px(2), 0))
 
         nav = tk.Frame(footer, bg=bg)
-        nav.pack(fill="x", padx=Theme.px(10), pady=(Theme.px(6), Theme.px(8)))
+        nav.pack(fill="x", padx=Theme.px(10), pady=(Theme.px(6), Theme.px(10)))
         self._sidebar_nav = nav
         self.status_chip = Chip(nav, text="Checking…", tone="neutral", dot=Palette.TEXT_FAINT, surface=bg,
                                 command=self.toggle_details, tooltip="Where speech and notes are processed")
         self.status_chip.pack(side="left", padx=(Theme.px(4), 0))
-        actions_row = tk.Frame(footer, bg=bg)
-        actions_row.pack(fill="x", padx=Theme.px(10), pady=(0, Theme.px(8)))
-        nav = actions_row
-        self.help_button = Button(nav, icon_name="help", variant="ghost-strong", size="sm", surface=bg,
-                                  command=self._open_help_menu, tooltip="Help")
-        self.help_button.pack(side="right")
-        self.settings_button = Button(nav, icon_name="settings", variant="ghost-strong", size="sm", surface=bg,
-                                      command=lambda: self._act("open_settings"), tooltip="Settings")
-        self.settings_button.pack(side="right")
-        self.data_button = Button(nav, icon_name="folder", variant="ghost-strong", size="sm", surface=bg,
-                                  command=self._open_data_menu, tooltip="Manage data")
-        self.data_button.pack(side="right")
-        self.appearance_button = Button(nav, icon_name="moon" if Theme.mode == "light" else "sun",
-                                        variant="ghost-strong", size="sm", surface=bg, command=self.toggle_appearance,
-                                        tooltip="Dark appearance" if Theme.mode == "light" else "Light appearance")
-        self.appearance_button.pack(side="right")
-
         # The artwork only appears when the window is tall enough to leave the session list room
         self.sidebar_art = Artwork(side, "sidebar-cosmos", height=92)
         self._sidebar_art_shown = False
@@ -562,7 +547,7 @@ class Workspace:
         self.set_storage_mode(self.storing_locally)
 
     def _fit_sidebar_art(self, side):
-        tall = side.winfo_height() >= Theme.px(800)
+        tall = side.winfo_height() >= Theme.px(940)
         if tall and not self._sidebar_art_shown:
             self.sidebar_art.pack(side="bottom", fill="x", padx=Theme.px(10), before=self.session_list)
             self._sidebar_art_shown = True
@@ -571,12 +556,15 @@ class Workspace:
             self._sidebar_art_shown = False
 
     def toggle_appearance(self):
-        mode = "dark" if Theme.mode == "light" else "light"
+        self.set_appearance("dark" if Theme.mode == "light" else "light")
+
+    def set_appearance(self, mode):
+        """Light or dark (View > Appearance)."""
+        if mode == Theme.mode:
+            return
         Theme.set_mode(self.root, mode)
         if self.ui_state is not None:
             self.ui_state.set("appearance", mode)
-        self.appearance_button.set(icon_name="sun" if mode == "dark" else "moon",
-                                   tooltip="Light appearance" if mode == "dark" else "Dark appearance")
         self.start_screen.refresh_templates()
         self._rebuild_session_list()
         self._refresh_meta()
@@ -1656,7 +1644,6 @@ class Workspace:
         """Lock the parts of the window that must not change while audio is captured."""
         self.locked = bool(locked)
         self.new_button.set_enabled(not self.locked)
-        self.data_button.set_enabled(not self.locked)
         self.transcript.set_readonly(self.locked)
         self.note.set_readonly(self.locked)
         for area in self._doc_areas.values():
@@ -1667,7 +1654,6 @@ class Workspace:
 
     def set_settings_enabled(self, enabled: bool):
         self.settings_enabled = bool(enabled)
-        self.settings_button.set_enabled(self.settings_enabled)
 
     def set_storage_mode(self, storing_locally: bool):
         self.storing_locally = bool(storing_locally)
@@ -1728,32 +1714,6 @@ class Workspace:
         else:
             text, dot = "Private · on this computer", Palette.SUCCESS
         self.status_chip.set(text=text, dot=dot)
-
-    def _open_help_menu(self):
-        from UI.QuickTour import show_tour
-        popup_menu(self.help_button, [
-            {"label": "Quick tour", "command": lambda: show_tour(self.root)},
-            {"label": "Help guide", "command": lambda: self._act("help_guide")},
-            {"label": "About FreeScribe", "command": lambda: self._act("about")},
-            {"label": "Keyboard shortcuts…", "command": lambda: self._act("keyboard_shortcuts")},
-            {"label": "Third-party licences", "command": lambda: self._act("third_party_notices")},
-            None,
-            {"label": "Debug window", "command": lambda: self._act("debug_window")},
-        ])
-
-    def _open_data_menu(self):
-        options = self._act("get_data_options", default={}) or {}
-        items = []
-        if options.get("recordings"):
-            items.append({"label": "Manage recordings…", "command": lambda: self._act("manage_recordings")})
-        if options.get("logs"):
-            items.append({"label": "Manage logs…", "command": lambda: self._act("manage_logs")})
-        if items:
-            items.append(None)
-        has_sessions = any(not session.is_empty for session in self.store.sessions)
-        items.append({"label": "Delete all sessions…", "command": self.delete_all_sessions,
-                      "enabled": has_sessions and not self.locked})
-        popup_menu(self.data_button, items)
 
     # =================================================================== tabs
     def show_tab(self, tab_id):

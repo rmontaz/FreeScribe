@@ -122,9 +122,13 @@ else:
     root.title(APP_NAME)
     # Colours, fonts and widget styling shared by every window
     Theme.init(root)
-    from UI.Art import StartupSplash
-    startup_splash = StartupSplash(root)
-    root.update()
+    # While the loading steps run, a splash holds the screen: the launcher's own (bootstrap.py), or one made here
+    from UI.Startup import StartupCoordinator, StartupScreen
+    startup_marker = os.environ.get("FREESCRIBE_STARTUP_READY")
+    if startup_marker:
+        root._startup_coordinator = StartupCoordinator(root, startup_marker)
+    else:
+        root._startup_coordinator = StartupScreen(root)
 
 if utils.system.is_macos():
     utils.system.install_macos_ssl_certificates()
@@ -3752,8 +3756,6 @@ def open_browser_extension():
 mic_test = MicrophoneTestFrame(parent=root, p=p, app_settings=app_settings, root=root)
 
 # Build the main workspace: session sidebar, recorder, Context / Transcript / Note tabs
-if startup_splash is not None:
-    startup_splash.destroy()
 workspace = Workspace(
     root,
     session_store,
@@ -3858,8 +3860,10 @@ if utils.system.is_system_low_memory() and not app_settings.is_low_mem_mode() an
         app_settings.save_settings_to_file()
         logger.debug("Low Memory Mode enabled.")
 
-if app_settings.editable_settings['Show Welcome Message'] and not UNATTENDED:
-    window.show_welcome_message()
+def _startup_finished():
+    """The app is on screen and its loading steps are done."""
+    if app_settings.editable_settings['Show Welcome Message'] and not UNATTENDED:
+        window.show_welcome_message()
 
 
 #Wait for the UI root to be intialized then load the model. If using local llm.
@@ -4108,6 +4112,8 @@ if app_settings.editable_settings[SettingsKeys.STORE_NOTES_LOCALLY.value]:
 root.bind("<<TranscribeOnlyModeChanged>>", update_ui_for_transcribe_only_mode)
 root.after(100, update_ui_for_transcribe_only_mode)
 
+# The loaders above are scheduled at 100 ms: let them register with the splash, then wait for them
+root.after(400, lambda: root._startup_coordinator.finish_when_idle(_startup_finished))
 root.mainloop()
 
 p.terminate()
