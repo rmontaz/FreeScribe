@@ -756,3 +756,18 @@ def test_ask_oscar_records_is_in_the_beta_group_and_asks_first(root, workspace):
     workspace.set_beta_notice_hidden(True)
     workspace.records_button.invoke()
     assert ("open_oscar_records", ()) in workspace.calls
+
+
+def test_menu_bar_is_drawn_inside_the_window(workspace):
+    """The menus look the same on every system: a strip in the window with app-drawn drop-downs."""
+    bar = workspace.menubar
+    assert set(bar.labels) == {"File", "Edit", "View", "Session", "Tools", "Help"}
+    assert bar.strip.winfo_manager() == "pack"
+    bar.open("File")
+    workspace.root.update()
+    assert bar.popup is not None and any(r.get("label") == "New session" for r in bar.popup.rows)
+    bar.open("Tools")                              # pointing at another title switches menus
+    assert bar.open_title == "Tools"
+    bar.close()
+    workspace.root.update()
+    assert bar.popup is None and bar.open_title is None

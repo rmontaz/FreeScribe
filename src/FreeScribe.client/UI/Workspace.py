@@ -311,6 +311,7 @@ class Workspace:
         self._bind_shortcuts()
         from UI.MenuBar import MenuBar
         self.menubar = MenuBar(self)       # File, Edit, View, Session, Tools and Help
+        self.menubar.build_strip(self.frame, before=self.full)
         if mic is not None:
             mic.add_listener(self._refresh_mic)
         self._refresh_mic()
@@ -1075,6 +1076,8 @@ class Workspace:
         self.flush_edits()
         self.compact = True
         Toast.dismiss(self.main)
+        if getattr(self, "menubar", None) is not None:
+            self.menubar.hide()
         self.full.pack_forget()
         self.compact_bar.pack(fill="both", expand=True)
 

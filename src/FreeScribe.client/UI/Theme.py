@@ -140,6 +140,11 @@ class Theme:
         except tk.TclError:
             cls.is_mac = False
         cls._detect_scale(root)
+        try:
+            from UI import Fonts
+            Fonts.register()
+        except Exception:
+            pass
         cls._detect_fonts(root)
         cls._configure_named_fonts()
         cls._configure_option_database(root)
@@ -171,10 +176,11 @@ class Theme:
         except tk.TclError:
             cls._families = frozenset()
 
+        # Inter ships with the app so every platform draws the same letterforms
         if sys.platform == "win32":
-            candidates = ["Segoe UI Variable Text", "Segoe UI"]
+            candidates = ["Inter", "Segoe UI Variable Text", "Segoe UI"]
         elif sys.platform == "darwin":
-            candidates = ["SF Pro Text", "Helvetica Neue"]
+            candidates = ["Inter", "SF Pro Text", "Helvetica Neue"]
         else:
             candidates = ["Inter", "Noto Sans", "Ubuntu", "Cantarell", "Open Sans", "DejaVu Sans", "Liberation Sans"]
 

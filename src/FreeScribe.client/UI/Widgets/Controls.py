@@ -42,14 +42,30 @@ def _rgb(color):
     return tuple(int(color[i:i + 2], 16) for i in (0, 2, 4))
 
 
-def rounded_image(width, height, radius, fill=None, outline=None, outline_width=1):
+def shade(color, amount):
+    """Lighten (amount > 0) or darken (amount < 0) a ``#rrggbb`` colour by up to 100 %."""
+    r, g, b = _rgb(color)
+    target = 255 if amount > 0 else 0
+    k = abs(amount)
+    return "#%02x%02x%02x" % tuple(int(round(v + (target - v) * k)) for v in (r, g, b))
+
+
+def mix(first, second, t):
+    """Blend two ``#rrggbb`` colours (t = 0 gives the first)."""
+    a, b = _rgb(first), _rgb(second)
+    return "#%02x%02x%02x" % tuple(int(round(x + (y - x) * t)) for x, y in zip(a, b))
+
+
+def rounded_image(width, height, radius, fill=None, outline=None, outline_width=1, gradient=False):
     """Return a cached Tk image of a smooth rounded rectangle (device pixels).
 
-    ``fill`` and ``outline`` are ``#rrggbb`` strings or ``None`` for transparent.
+    ``fill`` and ``outline`` are ``#rrggbb`` strings or ``None`` for transparent. With
+    ``gradient`` the fill is a soft top-to-bottom sheen (lighter at the top) with a fine
+    highlight along the top edge, so solid buttons have some depth.
     """
     width, height = max(1, int(width)), max(1, int(height))
     radius = max(0, min(int(radius), width // 2, height // 2))
-    key = (width, height, radius, fill, outline, outline_width)
+    key = (width, height, radius, fill, outline, outline_width, gradient)
     cached = _image_cache.get(key)
     if cached is not None:
         return cached
@@ -73,6 +89,23 @@ def rounded_image(width, height, radius, fill=None, outline=None, outline_width=
             draw.rounded_rectangle(inner, radius=max(0, radius * factor - inset), fill=inner_fill)
     elif fill:
         draw.rounded_rectangle(box, radius=radius * factor, fill=_rgb(fill) + (255,))
+
+    if gradient and fill:
+        top, bottom = shade(fill, 0.13), shade(fill, -0.10)
+        ramp = Image.new("RGB", (1, big.size[1]))
+        span = max(1, big.size[1] - 1)
+        ramp.putdata([_rgb(mix(top, bottom, y / span)) for y in range(big.size[1])])
+        sheen = ramp.resize(big.size).convert("RGBA")
+        mask = Image.new("L", big.size, 0)
+        ImageDraw.Draw(mask).rounded_rectangle(box, radius=radius * factor, fill=255)
+        edge = Image.new("L", big.size, 0)
+        line = max(1, factor)
+        ImageDraw.Draw(edge).rounded_rectangle(
+            [line, line, width * factor - 1 - line, height * factor - 1 - line], radius=max(0, radius * factor - line), fill=255)
+        ImageDraw.Draw(edge).rounded_rectangle(
+            [line, line + 2 * factor, width * factor - 1 - line, height * factor - 1 - line], radius=max(0, radius * factor - line), fill=0)
+        sheen.paste(Image.new("RGBA", big.size, shade(fill, 0.30)), mask=edge)  # the thin top highlight
+        big = Image.composite(sheen, big, mask) if not outline else big
 
     photo = ImageTk.PhotoImage(big.resize((width, height), Image.LANCZOS))
     if len(_image_cache) >= _IMAGE_CACHE_LIMIT:
@@ -261,7 +294,9 @@ class Button(tk.Canvas):
             ring = Palette.PRIMARY if self._variant not in ("primary",) else Palette.PRIMARY_PRESSED
             background = rounded_image(width, height, radius, fill or self._surface, ring, Theme.px(2))
         elif fill or outline:
-            background = rounded_image(width, height, radius, fill, outline, max(1, Theme.px(1)))
+            solid = self._enabled and self._variant in ("primary", "danger") and not outline
+            background = rounded_image(width, height, radius, self._tween_fill(fill), outline, max(1, Theme.px(1)),
+                                       gradient=solid)
         else:
             background = ""
         self.itemconfigure(self._bg_item, image=background)
@@ -314,15 +349,41 @@ class Button(tk.Canvas):
     def _on_configure(self, event):
         self._render()
 
+    def _tween_fill(self, target):
+        """The colour to draw now: eases toward ``target`` over a few frames instead of snapping."""
+        shown = getattr(self, "_shown_fill", None)
+        if not target or not shown or shown == target or not self._tweening:
+            self._shown_fill = target
+            return target
+        self._shown_fill = mix(shown, target, 0.5)
+        return self._shown_fill
+
+    _tweening = False
+
+    def _ease(self, steps=3):
+        """Redraw a few times so the colour change glides (about 50 ms)."""
+        self._tweening = True
+
+        def frame(remaining):
+            if not self.winfo_exists():
+                return
+            self._render()
+            if remaining > 0:
+                self.after(16, lambda: frame(remaining - 1))
+            else:
+                self._tweening = False
+                self._render()
+        frame(steps)
+
     def _on_enter(self, event):
         if self._enabled:
             self._hover = True
-            self._render()
+            self._ease()
 
     def _on_leave(self, event):
         self._hover = False
         self._pressed = False
-        self._render()
+        self._ease()
 
     def _on_press(self, event):
         if self._enabled:

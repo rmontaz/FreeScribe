@@ -5,9 +5,9 @@ The window's menu bar: File, Edit, View, Session, Tools and Help. It holds the s
 appearance, data and help items that used to be scattered over the sidebar. Every item calls
 the same method or action the old button called; nothing here has logic of its own.
 
-Menus are native (the Mac menu bar, the Windows or Linux window menu). Items that depend on
-the state of the app (recording, nothing to export, settings locked) are refreshed just before
-a menu opens.
+The bar is drawn inside the window (not by the operating system) so it looks and works the same
+on macOS, Windows and Linux. Items that depend on the state of the app (recording, nothing to
+export, settings locked) are refreshed just before a menu opens.
 
 This software is released under the AGPL-3.0 license.
 """
@@ -15,7 +15,8 @@ This software is released under the AGPL-3.0 license.
 import tkinter as tk
 
 from UI import Shortcuts
-from UI.Theme import Theme
+from UI.MenuPopup import MenuPopup
+from UI.Theme import Palette, Theme
 
 
 class MenuBar:
@@ -25,6 +26,7 @@ class MenuBar:
         self.ws = workspace
         self.root = workspace.root
         self.mac = Shortcuts.system(self.root) == "aqua"
+        self._titles = []                          # (title, menu), in bar order
         self.entries = {}                          # key -> (menu, index), so states can be refreshed
         self.bar = tk.Menu(self.root, tearoff=0)
         self.appearance = tk.StringVar(value=Theme.mode)
@@ -34,9 +36,11 @@ class MenuBar:
         self._build_session()
         self._build_tools()
         self._build_help()
-        self.root.configure(menu=self.bar)
-        if self.mac:
-            self._mac_application_menu()
+        self.strip = None
+        self.popup = None
+        self.open_title = None
+        self._mac_application_menu()
+        self._bind_settings_shortcut()
 
     # ---------------------------------------------------------------- helpers
     def _accel(self, key):
@@ -46,6 +50,7 @@ class MenuBar:
     def _menu(self, title, key):
         menu = tk.Menu(self.bar, tearoff=0, postcommand=lambda: self.refresh())
         self.bar.add_cascade(label=title, menu=menu)
+        self._titles.append((title, menu))
         return menu
 
     def _add(self, menu, key, label, command, accelerator=None, **options):
@@ -116,10 +121,9 @@ class MenuBar:
         self._add(menu, "logs", "Manage logs…", self._act("manage_logs"))
         self._add(menu, "delete_all", "Delete all sessions…", ws.delete_all_sessions)
         menu.add_separator()
-        if not self.mac:                                           # on a Mac they live in the application menu
-            self._add(menu, "settings", "Settings…", self._act("open_settings"))
-            menu.add_separator()
-            self._add(menu, "exit", "Exit", self._exit)
+        self._add(menu, "settings", "Settings…", self._act("open_settings"), self._accel(","))
+        menu.add_separator()
+        self._add(menu, "exit", "Quit FreeScribe" if self.mac else "Exit", self._exit, self._accel("Q") if self.mac else None)
 
     def _exit(self):
         """Closes the window the same way its close button does (which asks first when it must)."""
@@ -205,9 +209,8 @@ class MenuBar:
         self._add(menu, "licences", "Third-party licences", self._act("third_party_notices"))
         menu.add_separator()
         self._add(menu, "debug", "Debug window", self._act("debug_window"))
-        if not self.mac:
-            menu.add_separator()
-            self._add(menu, "about", "About FreeScribe", self._act("about"))
+        menu.add_separator()
+        self._add(menu, "about", "About FreeScribe", self._act("about"))
 
     def _mac_application_menu(self):
         """The Mac puts About and Preferences in the application menu, and Quit with Command+Q."""
@@ -245,3 +248,111 @@ class MenuBar:
             menu, index = self.entries[key]
             menu.entryconfigure(index, accelerator=shown)
         self._enable("generate", bool(ws.generate_button.enabled) and not ws.compact)
+
+    # ---------------------------------------------------------------- the bar in the window
+    def build_strip(self, parent, before=None):
+        """The bar itself: a slim row of titles at the top of the window."""
+        self.strip = tk.Frame(parent, bg=Palette.SIDEBAR, height=Theme.px(34))
+        self.strip.pack_propagate(False)
+        self.strip.pack(side="top", fill="x", before=before)
+        self.line = tk.Frame(parent, bg=Palette.BORDER, height=1)
+        self.line.pack(side="top", fill="x", before=before)
+        self.labels = {}
+        for title, menu in self._titles:
+            label = tk.Label(self.strip, text=title, font=Theme.font("base", "medium"), bg=Palette.SIDEBAR,
+                             fg=Palette.TEXT_MUTED, padx=Theme.px(11), cursor="arrow")
+            label.pack(side="left", fill="y", padx=(Theme.px(8) if not self.labels else 0, 0))
+            label.bind("<Enter>", lambda e, t=title: self._hover_title(t, True))
+            label.bind("<Leave>", lambda e, t=title: self._hover_title(t, False))
+            label.bind("<ButtonPress-1>", lambda e, t=title: self.toggle(t))
+            self.labels[title] = label
+        self.root.bind_all("<ButtonPress>", self._outside_click, add="+")
+        self.root.bind("<Configure>", self._root_moved, add="+")
+        return self.strip
+
+    def show(self):
+        if self.strip is not None and not self.strip.winfo_manager():
+            self.strip.pack(side="top", fill="x", before=self.ws.full)
+            self.line.pack(side="top", fill="x", before=self.ws.full)
+
+    def hide(self):
+        self.close()
+        for widget in (self.strip, self.line):
+            if widget is not None:
+                widget.pack_forget()
+
+    def _paint(self, title):
+        label = self.labels.get(title)
+        if label is None:
+            return
+        if title == self.open_title:
+            label.configure(bg=Palette.PRIMARY_SOFT if Theme.mode == "light" else Palette.HOVER,
+                            fg=Palette.PRIMARY_PRESSED if Theme.mode == "light" else Palette.TEXT)
+        else:
+            label.configure(bg=Palette.SIDEBAR, fg=Palette.TEXT_MUTED)
+
+    def _hover_title(self, title, inside):
+        if inside:
+            if self.open_title is not None and title != self.open_title:
+                self.open(title)               # once one menu is open, pointing at another switches to it
+            elif title != self.open_title:
+                self.labels[title].configure(bg=Palette.HOVER, fg=Palette.TEXT)
+        elif title != self.open_title:
+            self._paint(title)
+
+    def toggle(self, title):
+        if self.open_title == title:
+            self.close()
+        else:
+            self.open(title)
+
+    def open(self, title):
+        self.close()
+        menu = dict(self._titles)[title]
+        self.refresh()
+        label = self.labels[title]
+        x = label.winfo_rootx()
+        y = label.winfo_rooty() + label.winfo_height() - Theme.px(2)
+        self.open_title = title
+        self._paint(title)
+        self.popup = MenuPopup(self.root, menu, x, y, on_close=self._closed, on_move=self._move)
+
+    def _move(self, direction):
+        names = [title for title, _ in self._titles]
+        if self.open_title in names:
+            self.open(names[(names.index(self.open_title) + direction) % len(names)])
+
+    def _closed(self):
+        title, self.open_title, self.popup = self.open_title, None, None
+        if title:
+            self._paint(title)
+
+    def close(self):
+        if self.popup is not None:
+            self.popup.close()
+
+    def _outside_click(self, event):
+        if self.popup is None:
+            return
+        widget = event.widget
+        if self.popup.contains(widget) or widget in self.labels.values():
+            return
+        self.close()
+
+    def _root_moved(self, event):
+        if event.widget is self.root and self.popup is not None:
+            self.close()
+
+    def _bind_settings_shortcut(self):
+        modifier = "Command" if self.mac else "Control"
+        self.root.bind_all(f"<{modifier}-comma>", lambda e: (self.ws._act("open_settings")
+                           if self.ws.settings_enabled else None, "break")[1])
+
+    def recolor(self):
+        """After a light/dark switch."""
+        if self.strip is None:
+            return
+        self.strip.configure(bg=Palette.SIDEBAR)
+        self.line.configure(bg=Palette.BORDER)
+        for title in self.labels:
+            self._paint(title)
