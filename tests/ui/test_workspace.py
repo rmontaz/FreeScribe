@@ -771,3 +771,13 @@ def test_menu_bar_is_drawn_inside_the_window(workspace):
     bar.close()
     workspace.root.update()
     assert bar.popup is None and bar.open_title is None
+
+
+def test_welcome_window_reports_the_dont_show_choice(workspace):
+    from UI.WelcomeWindow import WelcomeWindow
+    seen = []
+    welcome = WelcomeWindow(workspace.root, callback=seen.append)
+    workspace.root.update()
+    welcome.dont_show.set(True)
+    welcome._close()
+    assert seen == [True]

@@ -326,7 +326,12 @@ class MainWindowUI:
         Display a welcome message when the application is launched.
         This method shows a welcome message in a message box when the application is launched.
         """
-        self._show_md_content(get_file_path('markdown','welcome.md'), 'Welcome', True)
+        def on_close(checkbox_state):
+            self.setting_window.settings.editable_settings['Show Welcome Message'] = not checkbox_state
+            self.setting_window.settings.save_settings_to_file()
+
+        from UI.WelcomeWindow import WelcomeWindow
+        WelcomeWindow(self.root, callback=on_close)
     
 
     def _background_availbility_docker_check(self):
