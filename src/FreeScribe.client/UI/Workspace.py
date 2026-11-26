@@ -23,6 +23,7 @@ import tkinter as tk
 import tkinter.messagebox as messagebox
 from tkinter import filedialog
 
+from UI.Art import Artwork, illustration
 from UI.ChatWindow import ChatPanel
 from UI.Icons import icon, logo
 from UI.NoteStyleSelector import NoteStyleSelector
@@ -71,7 +72,7 @@ def session_status(session, recording=False):
     if recording:
         return "Recording", Palette.DANGER_SOFT, Palette.DANGER
     if session.note.strip():
-        return "Note ready", Palette.PRIMARY_SOFT, Palette.PRIMARY_PRESSED
+        return "Note ready", Palette.PRIMARY_SOFT, (Palette.PRIMARY_PRESSED if Theme.mode == "light" else Palette.SUCCESS)
     if session.transcript.strip():
         return "Transcript", Palette.RAISED, Palette.TEXT_MUTED
     if session.context.strip() or session.documents:
@@ -82,9 +83,11 @@ def session_status(session, recording=False):
 class ToolRow(tk.Canvas):
     """A sidebar tool: a coloured icon tile and a label, the whole row clickable."""
 
-    HEIGHT = 40
+    HEIGHT = 42
+    ART = 34              # the picture or icon tile, centred in a box of this size
 
-    def __init__(self, parent, text, icon_name, tint, tile, command, tooltip=None, surface=Palette.SIDEBAR):
+    def __init__(self, parent, text, icon_name, tint, tile, command, tooltip=None, surface=None):
+        surface = surface or Palette.SIDEBAR
         super().__init__(parent, bg=surface, highlightthickness=0, bd=0, height=Theme.px(self.HEIGHT),
                          cursor="hand2", takefocus=1)
         self.text, self.icon_name, self.tint, self.tile = text, icon_name, tint, tile
@@ -93,9 +96,10 @@ class ToolRow(tk.Canvas):
         self._hover = False
         self._font = Theme.font("base", "medium")
         self._bg_item = self.create_image(0, 0, anchor="nw")
-        self._tile_item = self.create_image(Theme.px(8), Theme.px(self.HEIGHT) / 2, anchor="w")
-        self._icon_item = self.create_image(Theme.px(8 + 14), Theme.px(self.HEIGHT) / 2, anchor="center")
-        self._text_item = self.create_text(Theme.px(8 + 28 + 10), Theme.px(self.HEIGHT) / 2, anchor="w",
+        centre = Theme.px(10 + self.ART / 2)
+        self._tile_item = self.create_image(centre, Theme.px(self.HEIGHT) / 2, anchor="center")
+        self._icon_item = self.create_image(centre, Theme.px(self.HEIGHT) / 2, anchor="center")
+        self._text_item = self.create_text(Theme.px(10 + self.ART + 10), Theme.px(self.HEIGHT) / 2, anchor="w",
                                            font=self._font, text=text)
         self.bind("<Configure>", lambda e: self.refresh())
         self.bind("<Enter>", lambda e: self._set_hover(True))
@@ -103,6 +107,8 @@ class ToolRow(tk.Canvas):
         self.bind("<Button-1>", lambda e: self.invoke())
         self.bind("<Key-Return>", lambda e: self.invoke())
         self.bind("<Key-space>", lambda e: self.invoke())
+        self.bind("<FocusIn>", lambda e: self.refresh())
+        self.bind("<FocusOut>", lambda e: self.refresh())
         if tooltip:
             Tooltip(self, tooltip)
         self.refresh()
@@ -126,12 +132,21 @@ class ToolRow(tk.Canvas):
         width, height = max(self.winfo_width(), 2), Theme.px(self.HEIGHT)
         self._image = rounded_image(width, height, Theme.px(8), Palette.HOVER) if self._hover else ""
         self.itemconfigure(self._bg_item, image=self._image)
-        tile = Theme.px(28)
-        self._tile = rounded_image(tile, tile, Theme.px(7), self.tile if self.enabled else Palette.DISABLED_BG)
-        self.itemconfigure(self._tile_item, image=self._tile)
-        self.itemconfigure(self._icon_item, image=icon(self.icon_name, 15,
-                                                       self.tint if self.enabled else Palette.DISABLED_TEXT))
+        tile = Theme.px(self.ART - 4)
+        art_name = {"mapper": "nav-mapper", "globe": "nav-extension",
+                    "chat": "nav-chat", "database": "nav-records", "form": "nav-form"}.get(self.icon_name)
+        if art_name:
+            self._art = illustration(art_name, self.ART, not self.enabled)
+            self.itemconfigure(self._tile_item, image="")
+            self.itemconfigure(self._icon_item, image=self._art)
+        else:
+            self._tile = rounded_image(tile, tile, Theme.px(7), self.tile if self.enabled else Palette.DISABLED_BG)
+            self.itemconfigure(self._tile_item, image=self._tile)
+            self.itemconfigure(self._icon_item, image=icon(self.icon_name, 18, self.tint if self.enabled else Palette.DISABLED_TEXT))
         self.itemconfigure(self._text_item, fill=Palette.TEXT if self.enabled else Palette.DISABLED_TEXT)
+        self.delete("focus-ring")
+        if self.focus_get() is self:
+            self.create_rectangle(2, 2, width-3, height-3, outline=Palette.PRIMARY, width=2, tags="focus-ring")
 
 
 class SessionRow(tk.Canvas):
@@ -139,8 +154,9 @@ class SessionRow(tk.Canvas):
 
     HEIGHT = 54
 
-    def __init__(self, parent, session, on_select, on_menu, selected=False, surface=Palette.SIDEBAR,
+    def __init__(self, parent, session, on_select, on_menu, selected=False, surface=None,
                  is_recording=None):
+        surface = surface or Palette.SIDEBAR
         super().__init__(parent, bg=surface, highlightthickness=0, bd=0, height=Theme.px(self.HEIGHT), cursor="hand2")
         self.session = session
         self._on_select, self._on_menu = on_select, on_menu
@@ -251,7 +267,7 @@ class Workspace:
 
     SIDEBAR_WIDTH = 272
     MIN_SIZE = (980, 600)
-    DEFAULT_SIZE = (1200, 760)
+    DEFAULT_SIZE = (1400, 860)
     COMPACT_SIZE = (292, 56)
     LIST_PAGE = 150          # sessions drawn at once; older ones appear on request
 
@@ -446,7 +462,7 @@ class Workspace:
 
         brand = tk.Frame(side, bg=bg)
         brand.pack(fill="x", padx=(Theme.px(16), Theme.px(10)), pady=(Theme.px(16), Theme.px(14)))
-        logo_image = logo(26)
+        logo_image = logo(44)
         if logo_image is not None:
             tk.Label(brand, image=logo_image, bg=bg).pack(side="left")
         tk.Label(brand, text="FreeScribe", bg=bg, fg=Palette.TEXT, font=Theme.font("large", "semibold")).pack(
@@ -479,7 +495,7 @@ class Workspace:
             tk.Label(tools, text="TOOLS", bg=bg, fg=Palette.TEXT_FAINT, font=Theme.font("micro", "semibold"),
                      anchor="w").pack(fill="x", padx=Theme.px(4), pady=(Theme.px(4), Theme.px(2)))
         if "open_translate" in self.actions:
-            self.translate_button = ToolRow(tools, "Translate", "globe", "#0F766E", "#DDF3F0",
+            self.translate_button = ToolRow(tools, "Translate", "translate", "#0F766E", "#DDF3F0",
                                             command=lambda: self._act("open_translate"),
                                             tooltip="Talk with someone in another language: what is said and its "
                                                     "translation, large enough to show them")
@@ -490,10 +506,11 @@ class Workspace:
                                          tooltip="Map an OSCAR eForm from a PDF, in your web browser")
             self.mapper_button.pack(fill="x")
         if "open_browser_extension" in self.actions:
-            self.extension_button = ToolRow(tools, "Chrome extension", "globe", "#5B3FB5", "#ECE7FA",
+            self.extension_button = ToolRow(tools, "Chrome extension", "globe", Palette.INFO, Palette.INFO_SOFT,
                                             command=lambda: self._act("open_browser_extension"),
                                             tooltip="Control FreeScribe and paste notes into your EMR from Chrome")
             self.extension_button.pack(fill="x")
+
 
         # Footer is packed before the list so the list takes whatever height is left.
         footer = tk.Frame(side, bg=bg)
@@ -514,8 +531,14 @@ class Workspace:
                  font=Theme.font("micro"), anchor="w").pack(fill="x", padx=Theme.px(18), pady=(Theme.px(2), 0))
 
         nav = tk.Frame(footer, bg=bg)
-        nav.pack(fill="x", padx=Theme.px(10), pady=Theme.px(10))
+        nav.pack(fill="x", padx=Theme.px(10), pady=(Theme.px(6), Theme.px(8)))
         self._sidebar_nav = nav
+        self.status_chip = Chip(nav, text="Checking…", tone="neutral", dot=Palette.TEXT_FAINT, surface=bg,
+                                command=self.toggle_details, tooltip="Where speech and notes are processed")
+        self.status_chip.pack(side="left", padx=(Theme.px(4), 0))
+        actions_row = tk.Frame(footer, bg=bg)
+        actions_row.pack(fill="x", padx=Theme.px(10), pady=(0, Theme.px(8)))
+        nav = actions_row
         self.help_button = Button(nav, icon_name="help", variant="ghost-strong", size="sm", surface=bg,
                                   command=self._open_help_menu, tooltip="Help")
         self.help_button.pack(side="right")
@@ -525,13 +548,41 @@ class Workspace:
         self.data_button = Button(nav, icon_name="folder", variant="ghost-strong", size="sm", surface=bg,
                                   command=self._open_data_menu, tooltip="Manage data")
         self.data_button.pack(side="right")
-        self.status_chip = Chip(nav, text="Checking…", tone="neutral", dot=Palette.TEXT_FAINT, surface=bg,
-                                command=self.toggle_details, tooltip="Where speech and notes are processed")
-        self.status_chip.pack(side="left")
+        self.appearance_button = Button(nav, icon_name="moon" if Theme.mode == "light" else "sun",
+                                        variant="ghost-strong", size="sm", surface=bg, command=self.toggle_appearance,
+                                        tooltip="Dark appearance" if Theme.mode == "light" else "Light appearance")
+        self.appearance_button.pack(side="right")
 
+        # The artwork only appears when the window is tall enough to leave the session list room
+        self.sidebar_art = Artwork(side, "sidebar-cosmos", height=92)
+        self._sidebar_art_shown = False
+        side.bind("<Configure>", lambda e: self._fit_sidebar_art(side), add="+")
         self.session_list = ScrollFrame(side, bg=bg)
         self.session_list.pack(fill="both", expand=True, padx=(Theme.px(8), Theme.px(3)), pady=(Theme.px(4), 0))
         self.set_storage_mode(self.storing_locally)
+
+    def _fit_sidebar_art(self, side):
+        tall = side.winfo_height() >= Theme.px(800)
+        if tall and not self._sidebar_art_shown:
+            self.sidebar_art.pack(side="bottom", fill="x", padx=Theme.px(10), before=self.session_list)
+            self._sidebar_art_shown = True
+        elif not tall and self._sidebar_art_shown:
+            self.sidebar_art.pack_forget()
+            self._sidebar_art_shown = False
+
+    def toggle_appearance(self):
+        mode = "dark" if Theme.mode == "light" else "light"
+        Theme.set_mode(self.root, mode)
+        if self.ui_state is not None:
+            self.ui_state.set("appearance", mode)
+        self.appearance_button.set(icon_name="sun" if mode == "dark" else "moon",
+                                   tooltip="Light appearance" if mode == "dark" else "Dark appearance")
+        self.start_screen.refresh_templates()
+        self._rebuild_session_list()
+        self._refresh_meta()
+        self._refresh_toolbar()
+        if self.chat_panel is not None:
+            self.chat_panel.refresh()
 
     def toggle_details(self):
         """Show or hide the model status, storage note and version under the sidebar."""
@@ -545,7 +596,7 @@ class Workspace:
         bg = Palette.SIDEBAR
         rail = tk.Frame(parent, bg=bg, width=Theme.px(64))
         rail.pack_propagate(False)
-        logo_image = logo(28)
+        logo_image = logo(36)
         if logo_image is not None:
             tk.Label(rail, image=logo_image, bg=bg).pack(pady=(Theme.px(18), Theme.px(12)))
         self.rail_button = Button(rail, icon_name="panel", variant="ghost-strong", size="md", surface=bg,
@@ -820,6 +871,7 @@ class Workspace:
             "more_templates": lambda anchor: self._open_template_menu(anchor),
             "change_mic": lambda anchor: self._open_mic_menu(anchor),
             "dictate": self._dictate_from_start,
+            "resume_session": self.resume_recent_session,
         }, templates=lambda: (NoteStyleSelector.template_names(), NoteStyleSelector.current_style,
                               NoteStyleSelector.default_style, self.notes_enabled()))
         self._build_capture_side(self.pages)
@@ -903,6 +955,7 @@ class Workspace:
     def _refresh_start_screen(self):
         if not hasattr(self, "start_screen"):
             return
+        self.start_screen.show_resume(any(not s.is_empty and s is not self.current for s in self.store.sessions))
         if self._start_screen_wanted():
             if not self.start_screen.winfo_manager():
                 self.start_screen.refresh_templates()
@@ -1061,6 +1114,14 @@ class Workspace:
             if session.is_empty:
                 return session
         return self.store.new()
+
+    def resume_recent_session(self):
+        """Return to the newest non-empty session without starting recording."""
+        if self.locked or self.is_recording:
+            return
+        candidates = [s for s in self.store.sessions if not s.is_empty and s is not self.current]
+        if candidates:
+            self.select_session(max(candidates, key=lambda s: s.created_at))
 
     def new_session(self):
         """Switch to a fresh, empty session."""
@@ -1311,6 +1372,7 @@ class Workspace:
         bg = Palette.SIDEBAR
         groups = self.store.grouped(self._search_query, current=None if self._search_query else self.current)
         if not groups:
+            Artwork(body, "empty-search" if self._search_query else "empty-sessions", height=110).pack(fill="x", pady=(12, 0))
             message = ("No sessions match your search." if self._search_query
                        else "Your sessions will appear here.")
             tk.Label(body, text=message, bg=bg, fg=Palette.TEXT_FAINT, font=Theme.font("small"), justify="left",
@@ -1668,7 +1730,9 @@ class Workspace:
         self.status_chip.set(text=text, dot=dot)
 
     def _open_help_menu(self):
+        from UI.QuickTour import show_tour
         popup_menu(self.help_button, [
+            {"label": "Quick tour", "command": lambda: show_tour(self.root)},
             {"label": "Help guide", "command": lambda: self._act("help_guide")},
             {"label": "About FreeScribe", "command": lambda: self._act("about")},
             {"label": "Keyboard shortcuts…", "command": lambda: self._act("keyboard_shortcuts")},

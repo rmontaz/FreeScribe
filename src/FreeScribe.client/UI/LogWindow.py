@@ -1,3 +1,5 @@
+from UI.Art import Artwork
+from UI.Theme import Palette
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext
 from utils.AESCryptoUtils import AESCryptoUtilsClass
@@ -26,6 +28,7 @@ class LogWindow:
         tk.Button(button_frame, text="Copy to Clipboard", command=self.copy_to_clipboard).pack(side=tk.LEFT, padx=5)
         tk.Button(button_frame, text="Save to Disk", command=self.save_to_disk).pack(side=tk.LEFT, padx=5)
 
+        self.empty_art = Artwork(self.text_widget, "empty-activity", height=140)
         self.load_log()
 
     def load_log(self):
@@ -74,6 +77,10 @@ class LogWindow:
         if self.text_widget.winfo_exists():
             self.text_widget.delete("1.0", tk.END)
             self.text_widget.insert(tk.END, "".join(lines))
+            if lines:
+                self.empty_art.place_forget()
+            else:
+                self.empty_art.place(relx=.5, rely=.4, anchor="center", width=220, height=160)
             
     def copy_to_clipboard(self):
         content = self.text_widget.get(1.0, tk.END)

@@ -11,6 +11,7 @@ This software is released under the AGPL-3.0 license.
 import tkinter as tk
 
 from UI.Theme import Theme, Palette
+from UI.Art import Artwork
 from UI.Widgets.Controls import Button
 
 STEPS = (
@@ -75,6 +76,7 @@ class ExtensionWindow:
                       "into the patient’s chart with one click. The extension talks only to FreeScribe "
                       "on this computer.").pack(fill="x", pady=(Theme.px(4), Theme.px(14)))
 
+        Artwork(body, "ext-pair", height=90).pack(fill="x", pady=(0, 8))
         self.enabled = tk.BooleanVar(value=False)
         tk.Checkbutton(body, text="Let the FreeScribe Chrome extension control FreeScribe", variable=self.enabled,
                        command=self._toggle, bg=bg, fg=Palette.TEXT, activebackground=bg, anchor="w",

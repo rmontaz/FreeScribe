@@ -122,6 +122,9 @@ else:
     root.title(APP_NAME)
     # Colours, fonts and widget styling shared by every window
     Theme.init(root)
+    from UI.Art import StartupSplash
+    startup_splash = StartupSplash(root)
+    root.update()
 
 if utils.system.is_macos():
     utils.system.install_macos_ssl_certificates()
@@ -3749,6 +3752,8 @@ def open_browser_extension():
 mic_test = MicrophoneTestFrame(parent=root, p=p, app_settings=app_settings, root=root)
 
 # Build the main workspace: session sidebar, recorder, Context / Transcript / Note tabs
+if startup_splash is not None:
+    startup_splash.destroy()
 workspace = Workspace(
     root,
     session_store,
@@ -3855,6 +3860,7 @@ if utils.system.is_system_low_memory() and not app_settings.is_low_mem_mode() an
 
 if app_settings.editable_settings['Show Welcome Message'] and not UNATTENDED:
     window.show_welcome_message()
+
 
 #Wait for the UI root to be intialized then load the model. If using local llm.
 # Do not load the models if low mem is activated.

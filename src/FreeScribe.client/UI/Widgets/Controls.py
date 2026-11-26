@@ -83,11 +83,11 @@ def rounded_image(width, height, radius, fill=None, outline=None, outline_width=
     return photo
 
 
-def _bg_of(widget, default=Palette.BG):
+def _bg_of(widget, default=None):
     try:
         return widget.cget("bg")
     except tk.TclError:
-        return default
+        return default or Palette.BG
 
 
 # --------------------------------------------------------------------- Button
@@ -305,6 +305,10 @@ class Button(tk.Canvas):
             self.coords(self._trail_item, x, mid)
         else:
             self.itemconfigure(self._trail_item, state="hidden")
+        # Explicitly invalidate the foreground after replacing the bitmap below it.
+        # macOS Tk can otherwise leave unchanged labels unpainted on theme switches.
+        for item in (self._icon_item, self._text_item, self._trail_item):
+            self.tag_raise(item)
 
     # ---------------------------------------------------------------- events
     def _on_configure(self, event):
@@ -342,8 +346,10 @@ class Button(tk.Canvas):
 class RoundedFrame(tk.Canvas):
     """A container with a rounded background. Put children in ``.body``."""
 
-    def __init__(self, parent, fill=Palette.BG, outline=Palette.BORDER_STRONG, radius=10,
+    def __init__(self, parent, fill=None, outline="theme", radius=10,
                  padx=10, pady=6, surface=None, hug=False, **kwargs):
+        fill = fill or Palette.BG
+        outline = Palette.BORDER_STRONG if outline == "theme" else outline
         self._surface = surface or _bg_of(parent)
         super().__init__(parent, bg=self._surface, highlightthickness=0, bd=0, **kwargs)
         self._fill, self._outline, self._radius = fill, outline, radius
@@ -478,7 +484,9 @@ class PlaceholderEntry(tk.Entry):
     """
 
     def __init__(self, parent, placeholder="", on_change=None, on_submit=None, font=None, bg=None,
-                 fg=Palette.TEXT, placeholder_fg=Palette.TEXT_FAINT, **kwargs):
+                 fg=None, placeholder_fg=None, **kwargs):
+        fg = fg or Palette.TEXT
+        placeholder_fg = placeholder_fg or Palette.TEXT_FAINT
         self._var = tk.StringVar()
         bg = bg or _bg_of(parent)
         super().__init__(parent, textvariable=self._var, relief="flat", bd=0, highlightthickness=0,
@@ -581,7 +589,7 @@ class TextArea(tk.Frame):
     READING_WIDTH = 760
 
     def __init__(self, parent, placeholder="", on_change=None, highlight_headings=False,
-                 padx=28, pady=18, bg=Palette.BG, font=None, height=8, reading=False, on_section_copy=None,
+                 padx=28, pady=18, bg=None, font=None, height=8, reading=False, on_section_copy=None,
                  comfortable=False):
         """
         :param reading: note layout: section headings in the accent colour with a Copy button each,
@@ -589,6 +597,7 @@ class TextArea(tk.Frame):
         :param on_section_copy: called with the heading after a section was copied
         :param comfortable: the reading layout's type and line length, without the section buttons
         """
+        bg = bg or Palette.BG
         super().__init__(parent, bg=bg)
         self._on_change = on_change
         self._reading = reading
@@ -630,7 +639,7 @@ class TextArea(tk.Frame):
             self.text.tag_configure("measure", rmargin=0)
         if reading:
             self.text.tag_configure("heading", font=Theme.font("base", "semibold"),
-                                    foreground=Palette.PRIMARY_PRESSED, spacing1=Theme.px(10), spacing3=Theme.px(4))
+                                    foreground=Palette.SUCCESS, spacing1=Theme.px(10), spacing3=Theme.px(4))
             self.text.tag_configure("measure", rmargin=0)
         self.text.tag_configure("status", foreground=Palette.TEXT_MUTED)
 
@@ -910,7 +919,8 @@ class TextArea(tk.Frame):
 class ScrollFrame(tk.Frame):
     """A vertically scrolling container. Put children in ``.body``."""
 
-    def __init__(self, parent, bg=Palette.BG):
+    def __init__(self, parent, bg=None):
+        bg = bg or Palette.BG
         super().__init__(parent, bg=bg)
         self.canvas = tk.Canvas(self, bg=bg, highlightthickness=0, bd=0)
         self.scrollbar = Scrollbar(self, command=self.canvas.yview, surface=bg, width=7)
@@ -987,7 +997,8 @@ class ScrollFrame(tk.Frame):
 class Tabs(tk.Frame):
     """Underlined tab strip. The right-hand side (``.actions``) is free for toolbar buttons."""
 
-    def __init__(self, parent, on_select=None, on_close=None, bg=Palette.BG):
+    def __init__(self, parent, on_select=None, on_close=None, bg=None):
+        bg = bg or Palette.BG
         super().__init__(parent, bg=bg)
         self._on_select, self._on_close = on_select, on_close
         self._tabs = {}
@@ -1111,14 +1122,6 @@ class Tabs(tk.Frame):
 class Chip(tk.Canvas):
     """Small rounded label used for status and metadata."""
 
-    _TONES = {
-        "neutral": (Palette.RAISED, Palette.TEXT_MUTED),
-        "primary": (Palette.PRIMARY_SOFT, Palette.PRIMARY_PRESSED),
-        "danger": (Palette.DANGER_SOFT, Palette.DANGER),
-        "warning": (Palette.WARNING_SOFT, Palette.WARNING),
-        "info": (Palette.INFO_SOFT, Palette.INFO),
-        "plain": (None, Palette.TEXT_MUTED),
-    }
 
     def __init__(self, parent, text="", tone="neutral", icon_name=None, dot=None, surface=None, command=None,
                  tooltip=None):
@@ -1156,7 +1159,15 @@ class Chip(tk.Canvas):
         self._render()
 
     def _render(self):
-        fill, fg = self._TONES.get(self._tone, self._TONES["neutral"])
+        tones = {
+            "neutral": (Palette.RAISED, Palette.TEXT_MUTED),
+            "primary": (Palette.PRIMARY_SOFT, Palette.SUCCESS),
+            "danger": (Palette.DANGER_SOFT, Palette.DANGER),
+            "warning": (Palette.WARNING_SOFT, Palette.WARNING),
+            "info": (Palette.INFO_SOFT, Palette.INFO),
+            "plain": (None, Palette.TEXT_MUTED),
+        }
+        fill, fg = tones.get(self._tone, tones["neutral"])
         if self._command and self._hover:
             fill = Palette.HOVER if self._tone in ("plain", "neutral") else fill
             fg = Palette.TEXT if self._tone in ("plain", "neutral") else fg

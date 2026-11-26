@@ -23,55 +23,54 @@ from tkinter import ttk
 class Palette:
     """Colour tokens. Use these names rather than literal colours in UI code."""
 
-    # Linux Mint (Mint-Y light): white and light grey surfaces, #303030 text and Mint's green.
-    # Mint's own green (#35A854) is used where there is no text on it; buttons use a slightly deeper
-    # shade so white labels meet WCAG AA (4.5:1), as does every other text / background pair here
-    # except TEXT_FAINT, used only for hints.
-
-    # Surfaces
-    BG = "#FFFFFF"              # main working surface (Mint-Y base)
-    SIDEBAR = "#F0F0F1"         # navigation rail
-    SURFACE = "#F8F8F9"         # quiet panels, input wells (Mint-Y window background)
-    RAISED = "#EBEBED"          # neutral buttons, chips (Mint-Y header)
-    HOVER = "#E2E2E4"           # hover on sidebar rows / neutral buttons
-    SELECTED = "#D9D9DC"        # selected sidebar row
-    PRESSED = "#CFCFD2"
-
-    # Lines
-    BORDER = "#DFDFDF"          # Mint-Y separator
-    BORDER_STRONG = "#BABABA"   # Mint-Y entry border
-
-    # Text
-    TEXT = "#303030"            # Mint-Y text
-    TEXT_MUTED = "#5E5E62"
-    TEXT_FAINT = "#8E8E93"
+    # Cosmic light palette: opaque, quiet reading surfaces with teal actions.
+    BG = "#FBF9F3"
+    SIDEBAR = "#EDF3EE"
+    SURFACE = "#F3F5EF"
+    RAISED = "#E6EEE8"
+    HOVER = "#DCEAE3"
+    SELECTED = "#CBE7DC"
+    PRESSED = "#BBDACE"
+    BORDER = "#D3DED7"
+    BORDER_STRONG = "#A5BCB1"
+    TEXT = "#102F3C"
+    TEXT_MUTED = "#45626C"
+    TEXT_FAINT = "#617B80"
     TEXT_ON_PRIMARY = "#FFFFFF"
+    MINT = "#33BFA3"
+    PRIMARY = "#007C66"
+    PRIMARY_HOVER = "#006C59"
+    PRIMARY_PRESSED = "#005A49"
+    PRIMARY_SOFT = "#DBEEE3"
+    PRIMARY_SOFT_HOVER = "#C5E4D6"
+    DANGER = "#BC403A"
+    DANGER_HOVER = "#A53230"
+    DANGER_PRESSED = "#8C2929"
+    DANGER_SOFT = "#F8E5DF"
+    WARNING = "#86501B"
+    WARNING_SOFT = "#FAEED8"
+    WARNING_BORDER = "#E8CCA0"
+    SUCCESS = "#17876C"
+    INFO = "#2D6985"
+    INFO_SOFT = "#E1EEF3"
+    TOAST_BG = "#153640"
+    TOAST_TEXT = "#F3F7EF"
+    DISABLED_BG = "#E9ECE6"
+    DISABLED_TEXT = "#7B8B88"
 
-    # Brand / primary action (Mint green)
-    MINT = "#35A854"            # Mint-Y accent, for dots, meters and other marks without text
-    PRIMARY = "#2A8643"
-    PRIMARY_HOVER = "#287E3F"
-    PRIMARY_PRESSED = "#25763B"
-    PRIMARY_SOFT = "#E3F4E7"
-    PRIMARY_SOFT_HOVER = "#D2EDD9"
 
-    # Status (Mint-Y error red, warning orange and link blue, deepened where text sits on them)
-    DANGER = "#D2312A"
-    DANGER_HOVER = "#B82A24"
-    DANGER_PRESSED = "#9E241F"
-    DANGER_SOFT = "#FDE6E4"
-    WARNING = "#9A4A12"
-    WARNING_SOFT = "#FEEBDD"
-    WARNING_BORDER = "#F7C9A6"
-    SUCCESS = "#35A854"
-    INFO = "#2E6FC0"
-    INFO_SOFT = "#E6F0FC"
-
-    # Overlays
-    TOAST_BG = "#222226"        # Mint panel
-    TOAST_TEXT = "#FFFFFF"
-    DISABLED_BG = "#EFEFF0"
-    DISABLED_TEXT = "#A9A9AD"
+_LIGHT = {name: value for name, value in vars(Palette).items() if name.isupper()}
+_DARK = dict(_LIGHT, BG="#102832", SIDEBAR="#0B222C", SURFACE="#15313B",
+             RAISED="#203D45", HOVER="#294B52", SELECTED="#23584F", PRESSED="#1C4942",
+             BORDER="#2E4B54", BORDER_STRONG="#55717A", TEXT="#F2F4E9",
+             TEXT_MUTED="#BED1CE", TEXT_FAINT="#94B2B1", PRIMARY="#007C66",
+             PRIMARY_HOVER="#008B73", PRIMARY_PRESSED="#006251",
+             PRIMARY_SOFT="#1B4943", PRIMARY_SOFT_HOVER="#255D53",
+             DANGER="#DC746D", DANGER_HOVER="#CF625C", DANGER_PRESSED="#F1ADA4",
+             DANGER_SOFT="#452E33", WARNING="#E7BE79", WARNING_SOFT="#423B2E",
+             WARNING_BORDER="#78633E", SUCCESS="#61CEAC", INFO="#91CBE2",
+             INFO_SOFT="#203F51", TOAST_BG="#DFEDE4", TOAST_TEXT="#153640",
+             DISABLED_BG="#21363D", DISABLED_TEXT="#879E9F")
 
 
 # Type scale in points for Windows / Linux. macOS draws a point as one pixel,
@@ -99,6 +98,7 @@ class Theme:
     scale = 1.0
     family = "TkDefaultFont"
     initialized = False
+    mode = "light"
     _font_factor = 1.0
     _fonts = {}
     _families = frozenset()
@@ -128,6 +128,12 @@ class Theme:
     @classmethod
     def init(cls, root: tk.Misc) -> None:
         """Detect scaling and fonts, then install ttk styles and Tk defaults."""
+        import os
+        from utils.ui_state import UIState
+        mode = os.environ.get("FREESCRIBE_THEME") or UIState().get("appearance", "light")
+        cls.mode = mode if mode in ("light", "dark") else "light"
+        for name, value in (_DARK if cls.mode == "dark" else _LIGHT).items():
+            setattr(Palette, name, value)
         cls._forget_images()
         try:
             cls.is_mac = root.tk.call("tk", "windowingsystem") == "aqua"
@@ -491,3 +497,90 @@ class Theme:
         style.map("Treeview", background=[("selected", c.PRIMARY_SOFT)], foreground=[("selected", c.TEXT)])
         style.configure("Treeview.Heading", background=c.SURFACE, foreground=c.TEXT_MUTED, relief="flat",
                         font=cls.font("small", "semibold"), padding=(cls.px(8), cls.px(6)))
+
+
+    @classmethod
+    def set_mode(cls, root, mode):
+        """Recolour existing widgets in place; preserve editors, callbacks and focus."""
+        if mode not in ("light", "dark"):
+            raise ValueError("Unknown appearance")
+        if mode == cls.mode:
+            return
+        old = {name: getattr(Palette, name) for name in _LIGHT}
+        new = _DARK if mode == "dark" else _LIGHT
+        mapping = {old[name].lower(): new[name] for name in old}
+        from UI import Icons
+        image_keys = {str(photo): key for key, photo in Icons._photo_cache.items()}
+        cls.mode = mode
+        for name, value in new.items():
+            setattr(Palette, name, value)
+        cls._configure_option_database(root)
+        cls._configure_ttk(root)
+
+        def colour(value):
+            return mapping.get(value.lower(), value) if isinstance(value, str) else value
+
+        def repaint_image(widget, current, item=None):
+            key = image_keys.get(str(current))
+            if not key or key[0] == "__logo__":
+                return
+            name, pixels, tint = key
+            photo = Icons.icon(name, pixels / cls.scale, colour(tint))
+            if item is None:
+                widget.configure(image=photo)
+            else:
+                widget.itemconfigure(item, image=photo)
+
+        def visit(widget):
+            # Only stored colour attributes; never modify text or model objects.
+            for name, value in list(vars(widget).items()):
+                if isinstance(value, str) and value.lower() in mapping:
+                    setattr(widget, name, colour(value))
+            for option in ("background", "foreground", "activebackground", "activeforeground",
+                           "disabledbackground", "disabledforeground", "insertbackground",
+                           "selectbackground", "selectforeground", "inactiveselectbackground",
+                           "highlightbackground", "highlightcolor", "selectcolor", "troughcolor"):
+                try:
+                    value = widget.cget(option)
+                    if isinstance(value, str) and value.lower() in mapping:
+                        widget.configure(**{option: colour(value)})
+                except tk.TclError:
+                    pass
+            try:
+                repaint_image(widget, widget.cget("image"))
+            except tk.TclError:
+                pass
+            if isinstance(widget, tk.Text):
+                for tag in widget.tag_names():
+                    for option in ("foreground", "background"):
+                        value = widget.tag_cget(tag, option)
+                        if value:
+                            widget.tag_configure(tag, **{option: colour(value)})
+            if isinstance(widget, tk.Canvas):
+                for item in widget.find_all():
+                    for option in ("fill", "outline"):
+                        try:
+                            value = widget.itemcget(item, option)
+                            if value:
+                                widget.itemconfigure(item, **{option: colour(value)})
+                        except tk.TclError:
+                            pass
+                    if widget.type(item) == "image":
+                        repaint_image(widget, widget.itemcget(item, "image"), item)
+            for child in widget.winfo_children():
+                visit(child)
+            kind = type(widget).__name__
+            if hasattr(widget, "apply_theme"):
+                widget.apply_theme()
+            elif kind in ("Button", "Chip", "BigRecordButton", "TemplateCard"):
+                widget._last_size = None
+                widget._render()
+            elif kind in ("ToolRow", "SessionRow"):
+                widget.refresh()
+            elif kind == "RoundedFrame":
+                widget._size = None
+                widget._redraw(widget.winfo_width(), widget.winfo_height())
+            elif kind == "Scrollbar":
+                widget.THUMB, widget.THUMB_ACTIVE = Palette.BORDER_STRONG, Palette.TEXT_FAINT
+                widget._redraw()
+        visit(root)

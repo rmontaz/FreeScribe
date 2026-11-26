@@ -16,6 +16,7 @@ import platform
 import tkinter as tk
 
 from services import table_export
+from UI.Art import Artwork
 from UI.Icons import icon
 from UI.Theme import Theme, Palette
 from UI.Widgets.Controls import Button, ScrollFrame
@@ -23,8 +24,6 @@ from UI.Widgets.Controls import Button, ScrollFrame
 SUBTITLE = "Knows this visit's note, transcript, documents and forms"
 FOOTNOTE = "Names and numbers are hidden from the AI and put back in its reply."
 EMPTY = "Ask about this visit, for example “What follow-up was planned?” or “Write a short note for her employer”."
-FORM_TINT, FORM_TILE = "#7E3C0E", "#FEEBDD"
-QUERY_TINT, QUERY_TILE = "#1D4E89", "#E6EEF9"
 OSCAR_EMPTY = ("Ask about your OSCAR records, for example “How many active patients have diabetes?” or "
                "“Which of my patients had an A1C over 8 this year?”. You see the query before it runs.")
 QUERY_NOTE = "Read-only. Runs with your OSCAR login in Chrome (keep an OSCAR page with the FreeScribe panel open)."
@@ -203,6 +202,7 @@ class ChatPanel:
         self._profile_note = ""
         self._divider = tk.Frame(self.frame, bg=Palette.BORDER, height=1)
         self._divider.pack(fill="x")
+        self.scene = Artwork(self.frame, "chat-cosmos", height=205, cover=True, fade=True)
 
         # Bottom first so the conversation takes the remaining height
         bottom = tk.Frame(self.frame, bg=bg)
@@ -264,8 +264,12 @@ class ChatPanel:
             child.destroy()
         bg = Palette.SURFACE
         if not session.chat:
+            if not self.scene.winfo_manager():
+                self.scene.pack(fill="x", after=self._divider)
             tk.Label(body, text=OSCAR_EMPTY if self.oscar_mode else EMPTY, bg=bg, fg=Palette.TEXT_FAINT, anchor="w", justify="left",
                      font=Theme.font("base"), wraplength=self._wrap).pack(fill="x", pady=Theme.px(10))
+        if session.chat:
+            self.scene.pack_forget()
         for message in session.chat:
             self._message(body, message)
         busy = self.busy.get(session.id)
@@ -284,7 +288,7 @@ class ChatPanel:
         row = tk.Frame(body, bg=bg)
         row.pack(fill="x", pady=(Theme.px(6), Theme.px(4)), padx=(0, Theme.px(10)))
         if role == "user":
-            bubble = SelectableText(row, text, bg=Palette.TEXT, fg=Palette.TEXT_ON_PRIMARY, font=Theme.font("base"),
+            bubble = SelectableText(row, text, bg=Palette.PRIMARY_PRESSED, fg=Palette.TEXT_ON_PRIMARY, font=Theme.font("base"),
                                     wrap=self._wrap, padx=Theme.px(12), pady=Theme.px(8))
             bubble.configure(selectbackground="#5A5F6B", selectforeground=Palette.TEXT_ON_PRIMARY,
                              inactiveselectbackground="#5A5F6B")
@@ -302,7 +306,7 @@ class ChatPanel:
                    command=lambda t=text: self._copy(t), tooltip="Copy this reply").pack(anchor="w")
         else:
             oscar = message.get("icon") == "database"
-            tile, tint = (QUERY_TILE, QUERY_TINT) if oscar else (FORM_TILE, FORM_TINT)
+            tile, tint = (Palette.INFO_SOFT, Palette.INFO) if oscar else (Palette.WARNING_SOFT, Palette.WARNING)
             card = tk.Frame(row, bg=tile)
             card.pack(fill="x")
             tk.Label(card, image=icon("database" if oscar else "form", 16, tint), bg=tile).pack(
@@ -313,17 +317,17 @@ class ChatPanel:
 
     def _query_card(self, row, message):
         """A query of OSCAR's records: its SQL, then Run / Cancel, its state, or its rows."""
-        card = tk.Frame(row, bg=QUERY_TILE)
+        card = tk.Frame(row, bg=Palette.INFO_SOFT)
         card.pack(fill="x")
-        inner = tk.Frame(card, bg=QUERY_TILE)
+        inner = tk.Frame(card, bg=Palette.INFO_SOFT)
         inner.pack(fill="x", padx=Theme.px(10), pady=Theme.px(8))
-        head = tk.Frame(inner, bg=QUERY_TILE)
+        head = tk.Frame(inner, bg=Palette.INFO_SOFT)
         head.pack(fill="x")
-        tk.Label(head, image=icon("database", 15, QUERY_TINT), bg=QUERY_TILE).pack(side="left")
-        tk.Label(head, text="Query for OSCAR", bg=QUERY_TILE, fg=QUERY_TINT, font=Theme.font("small", "semibold"),
+        tk.Label(head, image=icon("database", 15, Palette.INFO), bg=Palette.INFO_SOFT).pack(side="left")
+        tk.Label(head, text="Query for OSCAR", bg=Palette.INFO_SOFT, fg=Palette.INFO, font=Theme.font("small", "semibold"),
                  anchor="w").pack(side="left", padx=(Theme.px(6), 0))
         if message.get("explain"):
-            SelectableText(inner, message["explain"], bg=QUERY_TILE, fg=Palette.TEXT, font=Theme.font("small"),
+            SelectableText(inner, message["explain"], bg=Palette.INFO_SOFT, fg=Palette.TEXT, font=Theme.font("small"),
                            wrap=self._wrap - Theme.px(20), shrink=False).pack(
                 fill="x", pady=(Theme.px(6), 0))
         tags = []
@@ -334,60 +338,60 @@ class ChatPanel:
         if message.get("counts_only"):
             tags.append("Counts only")
         if tags:
-            tk.Label(inner, text=" · ".join(tags), bg=QUERY_TILE, fg=QUERY_TINT, anchor="w", justify="left",
+            tk.Label(inner, text=" · ".join(tags), bg=Palette.INFO_SOFT, fg=Palette.INFO, anchor="w", justify="left",
                      font=Theme.font("micro", "semibold"), wraplength=self._wrap - Theme.px(20)).pack(
                 fill="x", pady=(Theme.px(2), 0))
-        SelectableText(inner, message.get("text", ""), bg=QUERY_TILE, fg=Palette.TEXT_MUTED, font=_mono(),
+        SelectableText(inner, message.get("text", ""), bg=Palette.INFO_SOFT, fg=Palette.TEXT_MUTED, font=_mono(),
                        wrap=self._wrap - Theme.px(20), shrink=False).pack(fill="x", pady=(Theme.px(6), Theme.px(6)))
-        Button(inner, text="Copy query", icon_name="copy", variant="ghost", size="xs", surface=QUERY_TILE,
+        Button(inner, text="Copy query", icon_name="copy", variant="ghost", size="xs", surface=Palette.INFO_SOFT,
                command=lambda t=message.get("text", ""): self._copy(t),
                tooltip="Copy the query (SQL) only").pack(anchor="w", pady=(0, Theme.px(4)))
         state = message.get("state", "proposed")
         if state == "proposed":
-            tk.Label(inner, text=QUERY_NOTE, bg=QUERY_TILE, fg=QUERY_TINT, justify="left", anchor="w",
+            tk.Label(inner, text=QUERY_NOTE, bg=Palette.INFO_SOFT, fg=Palette.INFO, justify="left", anchor="w",
                      font=Theme.font("micro"), wraplength=self._wrap - Theme.px(20)).pack(fill="x")
-            buttons = tk.Frame(inner, bg=QUERY_TILE)
+            buttons = tk.Frame(inner, bg=Palette.INFO_SOFT)
             buttons.pack(fill="x", pady=(Theme.px(6), 0))
-            Button(buttons, text="Run in OSCAR", icon_name="play", variant="primary", size="xs", surface=QUERY_TILE,
+            Button(buttons, text="Run in OSCAR", icon_name="play", variant="primary", size="xs", surface=Palette.INFO_SOFT,
                    command=lambda m=message: self._query_action(m, "run")).pack(side="left")
-            Button(buttons, text="Cancel", variant="ghost", size="xs", surface=QUERY_TILE,
+            Button(buttons, text="Cancel", variant="ghost", size="xs", surface=Palette.INFO_SOFT,
                    command=lambda m=message: self._query_action(m, "cancel")).pack(side="left", padx=(Theme.px(6), 0))
         elif state in ("waiting", "running"):
-            line = tk.Frame(inner, bg=QUERY_TILE)
+            line = tk.Frame(inner, bg=Palette.INFO_SOFT)
             line.pack(fill="x")
-            tk.Label(line, text=QUERY_STATES[state], bg=QUERY_TILE, fg=QUERY_TINT, font=Theme.font("small"),
+            tk.Label(line, text=QUERY_STATES[state], bg=Palette.INFO_SOFT, fg=Palette.INFO, font=Theme.font("small"),
                      anchor="w").pack(side="left")
-            Button(line, text="Cancel", variant="ghost", size="xs", surface=QUERY_TILE,
+            Button(line, text="Cancel", variant="ghost", size="xs", surface=Palette.INFO_SOFT,
                    command=lambda m=message: self._query_action(m, "cancel")).pack(side="right")
             if message.get("note") and state == "waiting":
-                SelectableText(inner, message["note"], bg=QUERY_TILE, fg=Palette.DANGER if "No OSCAR page" in
-                               message["note"] else QUERY_TINT, font=Theme.font("small"),
+                SelectableText(inner, message["note"], bg=Palette.INFO_SOFT, fg=Palette.DANGER if "No OSCAR page" in
+                               message["note"] else Palette.INFO, font=Theme.font("small"),
                                wrap=self._wrap - Theme.px(20), shrink=False).pack(fill="x", pady=(Theme.px(4), 0))
         elif state == "done":
             rows, columns = message.get("rows") or [], message.get("columns") or []
-            tk.Label(inner, text=f"{len(rows)} row{'s' if len(rows) != 1 else ''}", bg=QUERY_TILE, fg=QUERY_TINT,
+            tk.Label(inner, text=f"{len(rows)} row{'s' if len(rows) != 1 else ''}", bg=Palette.INFO_SOFT, fg=Palette.INFO,
                      font=Theme.font("small", "semibold"), anchor="w").pack(fill="x")
             if rows:
                 self._table(inner, columns, rows, message)
-                actions = tk.Frame(inner, bg=QUERY_TILE)
+                actions = tk.Frame(inner, bg=Palette.INFO_SOFT)
                 actions.pack(fill="x", pady=(Theme.px(4), 0))
                 Button(actions, text="View all rows", icon_name="expand", variant="primary", size="xs",
-                       surface=QUERY_TILE, command=lambda m=message: self.view_rows(m),
+                       surface=Palette.INFO_SOFT, command=lambda m=message: self.view_rows(m),
                        tooltip="Every row in a window: sort, select and copy with the mouse, or save").pack(side="left")
-                Button(actions, text="Excel", icon_name="download", variant="ghost", size="xs", surface=QUERY_TILE,
+                Button(actions, text="Excel", icon_name="download", variant="ghost", size="xs", surface=Palette.INFO_SOFT,
                        command=lambda m=message: self.save_rows(m, "xlsx"),
                        tooltip="Save every row as an Excel workbook (.xlsx)").pack(side="left", padx=(Theme.px(4), 0))
-                Button(actions, text="CSV", icon_name="download", variant="ghost", size="xs", surface=QUERY_TILE,
+                Button(actions, text="CSV", icon_name="download", variant="ghost", size="xs", surface=Palette.INFO_SOFT,
                        command=lambda m=message: self.save_rows(m, "csv"),
                        tooltip="Save every row as a CSV file").pack(side="left")
-                Button(actions, text="Copy rows", icon_name="copy", variant="ghost", size="xs", surface=QUERY_TILE,
+                Button(actions, text="Copy rows", icon_name="copy", variant="ghost", size="xs", surface=Palette.INFO_SOFT,
                        command=lambda c=columns, r=rows: self._copy(table_export.as_tsv(c, r)),
                        tooltip="Copy every row with the column names (pastes into a spreadsheet)").pack(side="left")
         else:
             text = message.get("error") or QUERY_STATES.get(state, "")
             if text:
-                SelectableText(inner, text, bg=QUERY_TILE, fg=Palette.DANGER if state in ("failed", "refused")
-                               else QUERY_TINT, font=Theme.font("small"), wrap=self._wrap - Theme.px(20),
+                SelectableText(inner, text, bg=Palette.INFO_SOFT, fg=Palette.DANGER if state in ("failed", "refused")
+                               else Palette.INFO, font=Theme.font("small"), wrap=self._wrap - Theme.px(20),
                                shrink=False).pack(fill="x")
 
     def _table(self, parent, columns, rows, message=None):
@@ -415,7 +419,7 @@ class ChatPanel:
         if len(columns) > len(shown_cols):
             more.append(f"{len(columns) - len(shown_cols)} more columns")
         if more:
-            tk.Label(parent, text=" and ".join(more) + ": View all rows shows them", bg=QUERY_TILE, fg=QUERY_TINT,
+            tk.Label(parent, text=" and ".join(more) + ": View all rows shows them", bg=Palette.INFO_SOFT, fg=Palette.INFO,
                      font=Theme.font("micro"), anchor="w").pack(fill="x")
 
     def view_rows(self, message):

@@ -3,6 +3,8 @@ from tkinter import ttk
 from utils.log_config import logger
 import UI.Helpers
 from UI.Theme import Theme, Palette
+from UI.Art import Artwork
+from UI.Widgets.Controls import Button
 import time
 import threading
 
@@ -74,11 +76,18 @@ class LoadingWindow:
         self.on_cancel = on_cancel
         self.cancelled = False
         self.ui_built = False
+        self._close_requested = threading.Event()
+        self._close_job = None
+        self._destroyed = False
     
-        if self.parent:
+        self._startup = getattr(parent, "_startup_coordinator", None)
+        self._in_splash = bool(self._startup and self._startup.attach(self))
+        if self.parent and not self._in_splash:
             self.parent.after(0, self.build_ui)
 
     def build_ui(self):
+        if self._close_requested.is_set():
+            return
         try:
             logger.debug("Building LoadingWindow UI")
             self.popup = tk.Toplevel(self.parent)
@@ -87,6 +96,9 @@ class LoadingWindow:
             # Works on every platform (a bare .ico is not accepted on Linux)
             UI.Helpers.set_window_icon(self.popup)
 
+            self.artwork = Artwork(self.popup, 'splash-universe', height=130, themed=False, cover=True, fade=True)
+            self.artwork.configure(width=Theme.px(380))
+            self.artwork.pack(fill='x')
             body = tk.Frame(self.popup, bg=Palette.BG)
             body.pack(fill="both", expand=True, padx=Theme.px(24), pady=(Theme.px(20), Theme.px(16)))
 
@@ -114,8 +126,8 @@ class LoadingWindow:
                 self.note_label.pack(fill="x", pady=(Theme.px(6), 0))
 
             # Add cancel button
-            self.cancel_button = ttk.Button(
-                body, text="Cancel", command=self._handle_cancel
+            self.cancel_button = Button(
+                body, text="Cancel", variant="neutral", command=self._handle_cancel
             )
             self.cancel_button.pack(anchor="e", pady=(Theme.px(14), 0))
 
@@ -145,6 +157,7 @@ class LoadingWindow:
             
             logger.debug("LoadingWindow UI built successfully")
             self.ui_built = True
+            self._poll_close()
         except Exception:
             logger.exception("Error creating LoadingWindow")
             # Enable the window on exception
@@ -161,7 +174,7 @@ class LoadingWindow:
             if label is not None and label.winfo_exists():
                 label.configure(text=text)
 
-        if self.parent:
+        if self.parent and not self._in_splash:
             try:
                 self.parent.after(0, apply)
             except RuntimeError:
@@ -182,57 +195,31 @@ class LoadingWindow:
 
         self.destroy()
 
+    def _poll_close(self):
+        if self._destroyed:
+            return
+        if self._close_requested.is_set():
+            self._destroy_ui()
+        else:
+            self._close_job = self.popup.after(80, self._poll_close)
+
+    def _destroy_ui(self):
+        if self._destroyed or not self.ui_built:
+            return
+        self._destroyed = True
+        try:
+            if self._close_job is not None:
+                self.popup.after_cancel(self._close_job)
+                self._close_job = None
+            self.progress.stop()
+            if self.parent:
+                UI.Helpers.enable_parent_window(self.parent, self.popup)
+            self.popup.destroy()
+        except tk.TclError:
+            pass  # The parent may already have closed.
+
     def destroy(self):
-        """
-        Clean up and destroy the popup window.
-
-        This method performs the following cleanup operations:
-        1. Stops the progress bar animation
-        2. Re-enables the parent window
-        3. Destroys the popup window
-
-        Note
-        ----
-        This method should be called when you want to close the popup window,
-        rather than destroying the window directly.
-
-        Example
-        -------
-        >>> popup = LoadingWindow()
-        >>> # Do some processing
-        >>> popup.destroy()  # Properly clean up and close the window
-        """
-        def _destroy_ui_main_thread():
-            if self.popup:
-                # Enable the parent window
-                if self.parent:
-                    logger.debug("Enabling parent window")
-                    UI.Helpers.enable_parent_window(self.parent, self.popup)
-
-                if hasattr(self, 'progress') and self.progress:
-                    logger.debug("Stopping progress bar animation")
-                    if self.progress.winfo_exists():
-                        # Stop the progress bar animation
-                        self.progress.stop()
-
-                if self.popup.winfo_exists():
-                    logger.debug("Destroying popup window")
-                    self.popup.destroy()
-
-        def _wait_for_ui_and_destroy():
-            start_time = time.time()
-            logger.debug("Waiting for LoadingWindow UI to be built")
-            while not self.ui_built:
-                elapsed_time = time.time() - start_time
-                if int(elapsed_time) % 2 == 0 or elapsed_time < 1:
-                    logger.info(f"Waiting for LoadingWindowUI to build (elapsed={elapsed_time}s, built={self.ui_built})")
-                time.sleep(0.1)
-                
-            # Schedule the UI destruction on the main thread
-            logger.debug("LoadingWindow UI is built, proceeding to destroy it")
-            self.popup.after(0, _destroy_ui_main_thread)
-
-        # Run the destroy logic in a separate thread to make it non-blocking
-        destroy_thread = threading.Thread(target=_wait_for_ui_and_destroy, daemon=True)
-        destroy_thread.start()
-
+        """Worker-safe cancellation; only the UI thread calls Tk."""
+        self._close_requested.set()
+        if threading.current_thread() is threading.main_thread():
+            self._destroy_ui()

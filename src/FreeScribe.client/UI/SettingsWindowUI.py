@@ -731,6 +731,11 @@ class SettingsWindowUI:
 
         # Whisper Settings
         row = self._create_section_header("Whisper Settings", row, text_colour="black", frame=self.advanced_settings_frame)
+        from UI.Art import Artwork
+        language_art = tk.Frame(self.advanced_settings_frame, bg=Palette.BG)
+        language_art.grid(row=row, column=0, columnspan=2, sticky="ew")
+        Artwork(language_art, "empty-translate", height=80).pack(fill="x")
+        row += 1
         left_frame = ttk.Frame(self.advanced_settings_frame)
         left_frame.grid(row=row, column=0, padx=10, pady=5, sticky="nw")
         right_frame = ttk.Frame(self.advanced_settings_frame)

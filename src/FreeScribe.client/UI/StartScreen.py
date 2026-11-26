@@ -11,6 +11,7 @@ This software is released under the AGPL-3.0 license.
 
 import tkinter as tk
 
+from UI.Art import CosmicHero, illustration
 from UI.Icons import icon
 from UI.Theme import Theme, Palette
 from UI import Shortcuts
@@ -36,9 +37,9 @@ class BigRecordButton(tk.Canvas):
 
     SIZE = 116
 
-    def __init__(self, parent, command, surface=Palette.BG):
+    def __init__(self, parent, command, surface=None):
         size = Theme.px(self.SIZE)
-        super().__init__(parent, width=size, height=size, bg=surface, highlightthickness=0, bd=0,
+        super().__init__(parent, width=size, height=size, bg=surface or Palette.BG, highlightthickness=0, bd=0,
                          cursor="hand2", takefocus=1)
         self._command = command
         self._hover = False
@@ -85,14 +86,15 @@ class TemplateCard(tk.Canvas):
 
     HEIGHT = 62
 
-    def __init__(self, parent, title, hint, command, selected=False, surface=Palette.BG):
-        super().__init__(parent, height=Theme.px(self.HEIGHT), bg=surface, highlightthickness=0, bd=0,
+    def __init__(self, parent, title, hint, command, selected=False, surface=None):
+        super().__init__(parent, height=Theme.px(self.HEIGHT), bg=surface or Palette.BG, highlightthickness=0, bd=0,
                          cursor="hand2", takefocus=1)
         self.title, self.hint = title, hint
         self.selected = selected
         self._command = command
         self._hover = False
         self._bg = self.create_image(0, 0, anchor="nw")
+        self._symbol = self.create_image(Theme.px(24), Theme.px(31))
         self._title = self.create_text(Theme.px(14), Theme.px(22), anchor="w", font=Theme.font("base", "semibold"))
         self._hint = self.create_text(Theme.px(14), Theme.px(42), anchor="w", font=Theme.font("small"))
         self.bind("<Configure>", lambda e: self._render())
@@ -100,6 +102,9 @@ class TemplateCard(tk.Canvas):
         self.bind("<Leave>", lambda e: self._set_hover(False))
         self.bind("<Button-1>", lambda e: self.invoke())
         self.bind("<Key-Return>", lambda e: self.invoke())
+        self.bind("<Key-space>", lambda e: self.invoke())
+        self.bind("<FocusIn>", lambda e: self._render())
+        self.bind("<FocusOut>", lambda e: self._render())
         self._render()
 
     def invoke(self):
@@ -125,11 +130,21 @@ class TemplateCard(tk.Canvas):
         self.itemconfigure(self._bg, image=image)
         font = Theme.font("base", "semibold")
         title = self.title
-        while len(title) > 2 and font.measure(title) > width - Theme.px(24):
+        show_symbol = width >= Theme.px(205)
+        text_x = Theme.px(46 if show_symbol else 14)
+        symbol = "database" if self.title == "More…" else "clipboard" if "History" in self.title else "doc"
+        self._illustration = illustration("illustrated-records" if symbol == "database" else "tour-2", 32)
+        self.itemconfigure(self._symbol, image=self._illustration, state="normal" if show_symbol else "hidden")
+        self.coords(self._title, text_x, Theme.px(22))
+        self.coords(self._hint, text_x, Theme.px(42))
+        while len(title) > 2 and font.measure(title) > width - text_x - Theme.px(12):
             title = title.rstrip("…")[:-1].rstrip() + "…"
         self.itemconfigure(self._title, text=title, fill=Palette.TEXT)
         self.itemconfigure(self._hint, text=self.hint,
-                           fill=Palette.PRIMARY_PRESSED if self.selected else Palette.TEXT_MUTED)
+                           fill=Palette.SUCCESS if self.selected else Palette.TEXT_MUTED)
+        self.delete("focus-ring")
+        if self.focus_get() is self:
+            self.create_rectangle(3, 3, width-4, height-4, outline=Palette.PRIMARY, width=2, dash=(3, 2), tags="focus-ring")
 
 
 class StartScreen(tk.Frame):
@@ -147,24 +162,20 @@ class StartScreen(tk.Frame):
         self.actions = actions
         self.templates = templates
         self.cards = []
+        self._dictate_shown = False
 
         column = tk.Frame(self, bg=Palette.BG)
-        column.place(relx=0.5, rely=0.46, anchor="center", relwidth=0.86)
+        column.place(x=0, y=0, relwidth=1)
         self.column = column
         self.bind("<Configure>", self._on_resize)
+        column.bind("<Configure>", lambda e: self._fit_hero())
 
-        self.record_button = BigRecordButton(column, command=lambda: self._do("record"))
-        self.record_button.pack()
-        self.title = tk.Label(column, text="Start transcribing", bg=Palette.BG, fg=Palette.TEXT,
-                              font=Theme.font("title", "semibold"))
-        self.title.pack(pady=(Theme.px(14), Theme.px(2)))
-        self.subtitle = tk.Label(column, text=self._subtitle_text(),
-                                 bg=Palette.BG, fg=Palette.TEXT_MUTED, font=Theme.font("base"))
-        self.subtitle.pack()
+        self.record_button = CosmicHero(column, command=lambda: self._do("record"), subtitle=self._subtitle_text)
+        self.record_button.pack(fill="x")
 
         # Microphone check
         mic = RoundedFrame(column, fill=Palette.SIDEBAR, outline=Palette.SIDEBAR, radius=14, padx=16, pady=12)
-        mic.pack(fill="x", pady=(Theme.px(26), 0))
+        mic.pack(fill="x", padx=Theme.px(28), pady=(Theme.px(26), 0))
         self.mic_box = mic
         body = mic.body
         self.meter = LevelMeter(body, bars=7, height=24, surface=Palette.SIDEBAR)
@@ -183,7 +194,7 @@ class StartScreen(tk.Frame):
 
         # Note type
         self.notes_frame = tk.Frame(column, bg=Palette.BG)
-        self.notes_frame.pack(fill="x", pady=(Theme.px(22), 0))
+        self.notes_frame.pack(fill="x", padx=Theme.px(28), pady=(Theme.px(22), 0))
         tk.Label(self.notes_frame, text="Note type", bg=Palette.BG, fg=Palette.TEXT_MUTED, anchor="w",
                  font=Theme.font("small", "semibold")).pack(fill="x", pady=(0, Theme.px(8)))
         self.card_row = tk.Frame(self.notes_frame, bg=Palette.BG)
@@ -192,26 +203,34 @@ class StartScreen(tk.Frame):
         # Other ways to begin
         others = tk.Frame(column, bg=Palette.BG)
         others.pack(pady=(Theme.px(22), 0))
-        tk.Label(others, text="Or", bg=Palette.BG, fg=Palette.TEXT_MUTED, font=Theme.font("base")).pack(
-            side="left", padx=(0, Theme.px(8)))
+
         self.upload_button = Button(others, text="Upload an audio file", icon_name="upload", variant="neutral",
                                     size="sm", command=lambda: self._do("upload"))
-        self.upload_button.pack(side="left", padx=(0, Theme.px(6)))
+        self.upload_button.grid(row=0, column=0, padx=Theme.px(3))
         self.paste_button = Button(others, text="Paste a transcript", icon_name="lines", variant="neutral",
                                    size="sm", command=lambda: self._do("paste"))
-        self.paste_button.pack(side="left", padx=(0, Theme.px(6)))
+        self.paste_button.grid(row=0, column=1, padx=Theme.px(3))
         self.context_button = Button(others, text="Add context first", icon_name="clipboard", variant="neutral",
                                      size="sm", command=lambda: self._do("context"))
-        self.context_button.pack(side="left")
+        self.context_button.grid(row=1, column=0, padx=Theme.px(3))
         # Dictate the note yourself (shown once the app has dictation, see show_dictate)
         self.dictate_button = Button(others, text="Dictate a note", icon_name="mic", variant="neutral",
                                      size="sm", command=lambda: self._do("dictate"),
                                      tooltip=lambda: Shortcuts.hint("Type what you say into the note", "dictate"))
 
+        self.resume_button = Button(column, text="Continue recent session", icon_name="undo", variant="ghost", size="sm",
+                                    command=lambda: self._do("resume_session"), tooltip="Return to your most recent session without recording")
         self.refresh_templates()
 
+    def show_resume(self, visible):
+        if visible and not self.resume_button.winfo_manager():
+            self.resume_button.pack(pady=(Theme.px(8), 0))
+        elif not visible:
+            self.resume_button.pack_forget()
+
     def show_dictate(self):
-        self.dictate_button.pack(side="left", padx=(Theme.px(6), 0))
+        self._dictate_shown = True
+        self.dictate_button.grid(row=1, column=1, padx=Theme.px(3))
 
     def _do(self, name, *args):
         action = self.actions.get(name)
@@ -225,11 +244,24 @@ class StartScreen(tk.Frame):
             else "The note is written when you stop."
 
     def shortcuts_changed(self):
-        self.subtitle.configure(text=self._subtitle_text())
+        self.record_button.draw()
 
     def _on_resize(self, event):
-        width = min(Theme.px(680), max(Theme.px(420), event.width - Theme.px(64)))
-        self.column.place_configure(relwidth=0, width=width)
+        width = event.width
+        self.column.place_configure(x=0, y=0, relwidth=1)
+        # Secondary actions wrap rather than clip when chat is docked.
+        buttons = [self.upload_button, self.paste_button, self.context_button]
+        if self._dictate_shown:
+            buttons.append(self.dictate_button)
+        cols = 4 if width >= Theme.px(730) else 2
+        for i, button in enumerate(buttons):
+            button.grid(row=i//cols, column=i%cols, padx=Theme.px(3), pady=Theme.px(3), sticky="ew")
+
+    def _fit_hero(self):
+        other_height = self.column.winfo_reqheight() - int(self.record_button.cget("height"))
+        height = Theme.px(min(360, max(150, int((self.winfo_height() - other_height) / Theme.scale) - 28)))
+        if int(self.record_button.cget("height")) != height:
+            self.record_button.configure(height=height)
 
     # ------------------------------------------------------------------ content
     def refresh_templates(self):
@@ -241,7 +273,7 @@ class StartScreen(tk.Frame):
             self.notes_frame.pack_forget()
             return
         if not self.notes_frame.winfo_manager():
-            self.notes_frame.pack(fill="x", pady=(Theme.px(22), 0), after=self.mic_box)
+            self.notes_frame.pack(fill="x", padx=Theme.px(28), pady=(Theme.px(22), 0), after=self.mic_box)
         # The default first, then the one in use, then the next built-in ones
         shown = []
         for name in [default, current] + [n for n in names if n != "No Note Generation"]:

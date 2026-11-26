@@ -17,6 +17,7 @@ import tkinter as tk
 from tkinter import ttk
 from typing import Callable, Optional
 
+from UI.Art import Artwork
 import UI.Helpers
 from services import translate as tr
 from UI.Theme import Theme, Palette
@@ -126,10 +127,18 @@ class TranslateWindow:
             text.tag_configure("pending", foreground=Palette.TEXT_FAINT)
             text.tag_configure("failed", foreground=Palette.DANGER)
             self.panes[side] = text
+            # Until something is said: a picture and a hint, not a blank box
+            hint = tk.Frame(inner, bg=inner["bg"])
+            Artwork(hint, "empty-translate", height=150, width=Theme.px(220)).pack()
+            tk.Label(hint, text="What is said appears here" if side == "left" else "Its translation appears here",
+                     bg=inner["bg"], fg=Palette.TEXT_MUTED, font=Theme.font("base")).pack(pady=(Theme.px(6), 0))
+            hint.place(relx=0.5, rely=0.46, anchor="center")
+            self.hints = getattr(self, "hints", {})
+            self.hints[side] = hint
         self._apply_font()
 
         bottom = tk.Frame(w, bg=Palette.BG)
-        bottom.pack(fill="x", padx=Theme.px(14), pady=Theme.px(12))
+        bottom.pack(side="bottom", fill="x", padx=Theme.px(14), pady=Theme.px(12), before=panes)   # never squeezed out
         self.left_mic = Button(bottom, text="", variant="primary", size="lg", icon_name="mic", surface=Palette.BG,
                                command=lambda: self.toggle("left"))
         self.auto_mic = Button(bottom, text="Auto", variant="neutral", size="lg", surface=Palette.BG,
@@ -273,6 +282,11 @@ class TranslateWindow:
 
     def redraw(self):
         try:
+            for side, hint in getattr(self, "hints", {}).items():
+                if self.conversation.exchanges:
+                    hint.place_forget()
+                else:
+                    hint.place(relx=0.5, rely=0.46, anchor="center")
             for side, text in self.panes.items():
                 text.configure(state="normal")
                 text.delete("1.0", "end")

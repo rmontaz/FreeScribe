@@ -58,6 +58,11 @@ class MarkdownWindow:
         # Process and render the content
         html_content = self._process_and_render_content()
 
+        if title == "About":
+            from UI.Art import Artwork
+            self.window.configure(bg=Palette.BG)
+            Artwork(self.window, "beta-flask", height=85).pack(fill="x", pady=(8, 0))
+
         # Create the main content area
         self._create_main_content(html_content)
 
