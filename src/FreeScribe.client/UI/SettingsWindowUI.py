@@ -36,6 +36,7 @@ from UI.SettingsConstant import SettingsKeys, Architectures, FeatureToggle
 from UI.Widgets.PopupBox import PopupBox
 from UI.Theme import Theme, Palette
 from UI.Icons import icon
+from UI.Widgets.Controls import Button
 import utils.log_config
 from utils.log_config import logger
 from constants.whisper_languages import WHISPER_LANGUAGE_CODES
@@ -193,13 +194,13 @@ class SettingsWindowUI:
         #warning headers
         row = self._create_section_header(
             text="⚠️ Developer Settings - Do Not Modify", 
-            text_colour="red", 
+            text_colour=Palette.DANGER, 
             frame=self.developer_frame, 
             row=row)
         row = self._create_section_header(
             text="If you have accidentally accessed this menu please do not touch any of the settings below.", 
             row=row, 
-            text_colour="red", 
+            text_colour=Palette.DANGER, 
             frame=self.developer_frame) 
 
         left_frame = ttk.Frame(self.developer_frame)
@@ -237,8 +238,8 @@ class SettingsWindowUI:
             self.developer_frame,
             text=initial_prompt_explanation,
             justify="left",
-            font=("Arial", 9),
-            fg="#272927"
+            font=Theme.font("small"),
+            fg=Palette.TEXT_MUTED
         ).grid(row=text_row1, column=1, padx=(10, 0), pady=5, sticky="nw")
         
     def _display_center_to_parent(self):
@@ -367,8 +368,8 @@ class SettingsWindowUI:
         frame = tk.Frame(self.whisper_settings_frame)
         frame.grid(row=1, column=0, columnspan=2, padx=10, pady=(10, 5), sticky="nsew")
         frame.columnconfigure(0, weight=1)
-        tk.Label(frame, text="Medical vocabulary", font=("Arial", 10, "bold")).grid(row=0, column=0, sticky="w")
-        tk.Label(frame, justify="left", font=("Arial", 9), wraplength=620, text=(
+        tk.Label(frame, text="Medical vocabulary", font=Theme.font("medium", "semibold")).grid(row=0, column=0, sticky="w")
+        tk.Label(frame, justify="left", font=Theme.font("small"), wraplength=620, text=(
             "Words the speech-to-text should listen for, one per line or separated by commas: drug names, "
             "conditions or terms you use often. FreeScribe also adds drug names it finds in each session's "
             "Context (for example the patient's medication list) and common clinical terms. Only about 150 "
@@ -701,16 +702,16 @@ class SettingsWindowUI:
             self.create_editable_settings_col(left_frame, right_frame, 0, 0, settings)
             return row + 1
 
-        row = self._create_section_header("⚠️ Advanced Settings (For Advanced Users Only)", 0, text_colour="red", frame=self.advanced_settings_frame)
+        row = self._create_section_header("⚠️ Advanced Settings (For Advanced Users Only)", 0, text_colour=Palette.DANGER, frame=self.advanced_settings_frame)
         
         # General Settings
         if len(self.settings.adv_general_settings) > 0:
-            row = self._create_section_header("General Settings", row, text_colour="black", frame=self.advanced_settings_frame)
+            row = self._create_section_header("General Settings", row, text_colour=Palette.TEXT, frame=self.advanced_settings_frame)
             row = create_settings_columns(self.settings.adv_general_settings, row)
 
         if FeatureToggle.INTENT_ACTION:
             # Google Maps Integration
-            row = self._create_section_header("Google Maps Integration", row, frame=self.advanced_settings_frame, text_colour="black")
+            row = self._create_section_header("Google Maps Integration", row, frame=self.advanced_settings_frame, text_colour=Palette.TEXT)
             maps_frame = ttk.LabelFrame(self.advanced_settings_frame, text="API Configuration")
             maps_frame.grid(row=row, column=0, columnspan=2, padx=10, pady=5, sticky="ew")
             
@@ -730,7 +731,7 @@ class SettingsWindowUI:
             row += 1
 
         # Whisper Settings
-        row = self._create_section_header("Whisper Settings", row, text_colour="black", frame=self.advanced_settings_frame)
+        row = self._create_section_header("Whisper Settings", row, text_colour=Palette.TEXT, frame=self.advanced_settings_frame)
         from UI.Art import Artwork
         language_art = tk.Frame(self.advanced_settings_frame, bg=Palette.BG)
         language_art.grid(row=row, column=0, columnspan=2, sticky="ew")
@@ -760,7 +761,7 @@ pady=5, sticky="w")
         row += 1
 
         # AI Settings
-        row = self._create_section_header("AI Settings", row, text_colour="black", frame=self.advanced_settings_frame)
+        row = self._create_section_header("AI Settings", row, text_colour=Palette.TEXT, frame=self.advanced_settings_frame)
         row = create_settings_columns(self.settings.adv_ai_settings, row)
         
         if FeatureToggle.POST_PROCESSING is True:
@@ -898,7 +899,7 @@ pady=5, sticky="w")
         pad_y = Theme.px(10)
 
         # Place the "Help" button on the left
-        ttk.Button(footer_frame, text="Help", width=10, command=self.create_help_window).pack(side="left", padx=(Theme.px(12), 2), pady=pad_y)
+        Button(footer_frame, text="Help", variant="ghost-strong", min_width=84, command=self.create_help_window, surface=footer_bg).pack(side="left", padx=(Theme.px(12), 2), pady=pad_y)
 
         # Place the label in the center
         version = get_application_version()
@@ -910,9 +911,9 @@ pady=5, sticky="w")
         right_frame.pack(side="right", padx=(0, Theme.px(12)))
 
         # Pack all other buttons into the right frame; Save is the primary action
-        ttk.Button(right_frame, text="Save", width=10, command=self.save_settings, style="Accent.TButton").pack(side="right", padx=(Theme.px(6), 0), pady=pad_y)
-        ttk.Button(right_frame, text="Close", width=10, command=self.close_window).pack(side="right", padx=(Theme.px(6), 0), pady=pad_y)
-        ttk.Button(right_frame, text="Default", width=10, command=self.reset_to_default).pack(side="right", pady=pad_y)
+        Button(right_frame, text="Save", variant="primary", min_width=84, command=self.save_settings, surface=footer_bg).pack(side="right", padx=(Theme.px(6), 0), pady=pad_y)
+        Button(right_frame, text="Close", variant="secondary", min_width=84, command=self.close_window, surface=footer_bg).pack(side="right", padx=(Theme.px(6), 0), pady=pad_y)
+        Button(right_frame, text="Default", variant="ghost-strong", min_width=84, command=self.reset_to_default, surface=footer_bg).pack(side="right", pady=pad_y)
 
     def create_help_window(self):
         """
@@ -1176,7 +1177,7 @@ pady=5, sticky="w")
         self.settings.editable_settings_entries[setting_name] = entry
         return entry
 
-    def _create_section_header(self, text, row, frame, text_colour="black"):
+    def _create_section_header(self, text, row, frame, text_colour=Palette.TEXT):
         """
         Creates a section header label in the advanced settings frame.
         
@@ -1191,7 +1192,7 @@ pady=5, sticky="w")
         ttk.Label(
             frame, 
             text=text,
-            font=("TkDefaultFont", 10, "bold"),
+            font=Theme.font("base", "semibold"),
             foreground=text_colour
         ).grid(row=row, column=0, columnspan=2, padx=10, 
             pady=(5 if text.startswith("⚠️") else 0, 10 if text.startswith("⚠️") else 0), 
