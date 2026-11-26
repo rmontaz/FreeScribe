@@ -780,7 +780,11 @@ class TextArea(tk.Frame):
         return value
 
     # ------------------------------------------------------------- internals
+    changed_by_hand = False      # whether the change just reported to ``on_change`` was typed by a person
+    _programmatic = False
+
     def _after_programmatic_change(self):
+        self._programmatic = True
         self._refresh_placeholder()
         self._schedule_change()
 
@@ -811,6 +815,8 @@ class TextArea(tk.Frame):
             self._apply_headings(value)
         elif self._comfortable:
             self.text.tag_add("measure", "1.0", "end")
+        self.changed_by_hand = not self._programmatic
+        self._programmatic = False
         if value != self._last_text:
             self._last_text = value
             if self._on_change:

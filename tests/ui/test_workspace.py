@@ -781,3 +781,45 @@ def test_welcome_window_reports_the_dont_show_choice(workspace):
     welcome.dont_show.set(True)
     welcome._close()
     assert seen == [True]
+
+
+@pytest.fixture
+def activity(tmp_path):
+    """The shared activity log, pointed at a temporary file for the test."""
+    from services import activity_log
+    enc = lambda text: text[::-1].encode().hex()
+    dec = lambda text: bytes.fromhex(text).decode()[::-1]
+    before = (activity_log.log.path, activity_log.log._encrypt, activity_log.log._decrypt, activity_log.log.settings,
+              activity_log.log.session_info, activity_log.log.suspended)
+    activity_log.install(str(tmp_path / "log.txt"), enc, dec)
+    yield activity_log.log
+    (activity_log.log.path, activity_log.log._encrypt, activity_log.log._decrypt, activity_log.log.settings,
+     activity_log.log.session_info, activity_log.log.suspended) = before
+    activity_log.log._entries = None
+
+
+def test_activity_log_records_ai_notes_revisions_and_documents(workspace, activity):
+    session = workspace.current
+    workspace.apply_note(session.id, "Plan: rest", "SOAP Note")
+    workspace.apply_revision({"kind": "note", "session_id": session.id, "text": "Plan: rest"}, "Plan: rest, fluids",
+                             "add fluids")
+    workspace.add_document(session.id, "Referral Letter", "Referral", "Dear colleague")
+    entries = {e["title"]: e for e in activity.entries()}
+    assert entries["The AI wrote the note"]["after"] == "Plan: rest"
+    revised = entries["The AI changed the note"]
+    assert (revised["before"], revised["after"], revised["instruction"]) == ("Plan: rest", "Plan: rest, fluids", "add fluids")
+    assert entries["The AI wrote the Referral Letter"]["by"] == "ai"
+
+
+def test_typing_is_one_entry_per_burst_but_programmatic_text_is_not_logged(workspace, root, activity):
+    session = workspace.current
+    workspace.note.text.insert("end", "typed by hand")          # a person typing
+    pump(root, 0.4)
+    assert activity.count() == 0                                  # still inside the burst
+    workspace.hand_edits.flush()
+    typed = [e for e in activity.entries() if e["by"] == "hand"]
+    assert len(typed) == 1 and typed[0]["after"] == "typed by hand" and typed[0]["session"] == session.id
+    workspace.note.set_text("set by the app")                    # not typing
+    pump(root, 0.4)
+    workspace.hand_edits.flush()
+    assert len([e for e in activity.entries() if e["by"] == "hand"]) == 1

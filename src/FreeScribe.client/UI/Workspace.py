@@ -305,6 +305,11 @@ class Workspace:
         self.records_chat = None         # the OSCAR records chat while the panel shows it (None: a visit's chat)
         self._ignored_words = set()      # words the clinician confirmed are right
 
+        from services import activity_log
+        self._activity = activity_log
+        self.hand_edits = activity_log.HandEdits(
+            activity_log.log, schedule=lambda ms, fn: self.root.after(ms, fn),
+            cancel=lambda job: self.root.after_cancel(job))
         self._build()
         self.select_session(self._blank_session())
         self._rebuild_session_list()
@@ -1135,6 +1140,7 @@ class Workspace:
         if session is None:
             return
         self.flush_edits()
+        self.hand_edits.flush()
         self.current = session
         self.title_entry.set_value(session.title)
         self.context.set_text(session.context)
@@ -1301,11 +1307,24 @@ class Workspace:
         self._ignored_words.add(word.lower())
         self.check_drug_names()
 
+    def _typed_by_hand(self, area):
+        """Typed by a person, not words the app put there (dictation, live transcription, the AI)."""
+        if not area.changed_by_hand:
+            return False
+        if self.voice is not None and self.voice.active:
+            return False
+        return time.monotonic() >= getattr(self, "_no_hand_until", 0)
+
+    def _session_info(self, session):
+        return (session.id, session.display_title)
+
     def _update_field(self, field, value):
         session = self.current
         if session is None or getattr(session, field) == value:
             return
         was_empty = session.is_empty
+        if field == "note" and self._typed_by_hand(self.note):
+            self.hand_edits.typed(self._session_info(session), "Note", getattr(session, field), value)
         setattr(session, field, value)
         self._touch(session, was_empty)
 
@@ -1965,6 +1984,9 @@ class Workspace:
     def _update_document(self, document, value):
         if document.text == value or self.current is None or document not in self.current.documents:
             return
+        area = self._doc_areas.get(document.id)
+        if area is not None and self._typed_by_hand(area):
+            self.hand_edits.typed(self._session_info(self.current), document.title, document.text, value)
         document.text = value
         self._touch(self.current)
 
@@ -1999,6 +2021,8 @@ class Workspace:
             unique = f"{title} ({counter})"
             counter += 1
         document = Document(title=unique, text=text, template=template)
+        self._activity.log.record("edit", f"The AI wrote the {unique}", session=self._session_info(session), by="ai",
+                                  tab=unique, template=template, before="", after=text)
         session.documents.append(document)
         if session is self.current:
             self._add_document_tab(document, select=True)
@@ -2123,9 +2147,19 @@ class Workspace:
             self.toast("This tab can't be edited right now", icon_name="info")
             return
         page.focus_editor()
-        problem = self.voice.start(page.text, on_state=self._dictation_state)
+        tab = self.current_tab()
+        label = "Context" if tab == "context" else "Transcript" if tab == "transcript" else "Note" if tab == "note" else "Document"
+        session = self.current
+        problem = self.voice.start(page.text, on_state=self._dictation_state,
+                                   on_done=lambda text, s=session, l=label: self._log_dictation(s, l, text))
         if problem:
             self.toast(problem, icon_name="info")
+
+    def _log_dictation(self, session, label, text):
+        self._no_hand_until = time.monotonic() + 1.5      # the last dictated words are not hand edits
+        if text and text.strip() and session is not None:
+            self._activity.log.record("dictation", f"Dictated in the {label} tab", session=self._session_info(session),
+                                      tab=label, text=text.strip(), source="app")
 
     def _dictation_state(self, state):
         self._dictate_label()
@@ -2181,7 +2215,7 @@ class Workspace:
         self.root.focus_set()
         self._act("ask", instruction, target)
 
-    def apply_revision(self, target, text):
+    def apply_revision(self, target, text, instruction=""):
         """Replace the note or document the assistant was asked to edit."""
         session = self.store.get(target.get("session_id")) or self.current
         if session is None:
@@ -2190,10 +2224,14 @@ class Workspace:
             document = session.find_document(target.get("id"))
             if document is None:
                 return
+            self._activity.log.record("edit", f"The AI changed the {document.title}", session=self._session_info(session),
+                                      by="ai", tab=document.title, instruction=instruction, before=document.text, after=text)
             document.text = text
             area = self._doc_areas.get(document.id) if session is self.current else None
             tab_id = f"doc:{document.id}"
         else:
+            self._activity.log.record("edit", "The AI changed the note", session=self._session_info(session), by="ai",
+                                      tab="Note", instruction=instruction, before=session.note, after=text)
             session.note = text
             area = self.note if session is self.current else None
             tab_id = "note"
@@ -2249,6 +2287,8 @@ class Workspace:
         if session is None:
             return None
         was_empty = session.is_empty
+        self._activity.log.record("edit", "The AI wrote the note", session=self._session_info(session), by="ai",
+                                  tab="Note", template=template or session.template, before=session.note, after=text)
         session.note = text
         session.template = template or session.template
         if session is self.current:
@@ -2283,6 +2323,8 @@ class Workspace:
             return
         self.flush_edits()
         text = add_denials_to_note(session.note, phrases)
+        self._activity.log.record("edit", "Added to the note what the patient said no to", session=self._session_info(session),
+                                  by="add to note", tab="Note", before=session.note, after=text)
         session.note = text
         self.note.set_text(text, undoable=True)
         self.show_tab("note")

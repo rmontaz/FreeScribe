@@ -117,6 +117,8 @@ class MenuBar:
         menu.add_cascade(label="Export the open tab", menu=export)
         self.entries["export"] = (menu, menu.index("end"))
         menu.add_separator()
+        if self.has_action("open_activity_log"):
+            self._add(menu, "activity", "Activity log…", self._act("open_activity_log"))
         self._add(menu, "recordings", "Manage recordings…", self._act("manage_recordings"))
         self._add(menu, "logs", "Manage logs…", self._act("manage_logs"))
         self._add(menu, "delete_all", "Delete all sessions…", ws.delete_all_sessions)

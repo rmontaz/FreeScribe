@@ -93,6 +93,7 @@ from services import form_filler
 from UI.FormFillWindow import FormFillWindow
 from services.chat import compose_chat_prompt, form_event_text
 from services.dictation import Dictation, to_wav_bytes
+from services import activity_log
 from services.medical_vocab import (DrugLexicon, VisitLanguage, build_speech_prompt, is_prompt_echo,
                                     split_terms)
 from utils.ui_state import UIState
@@ -387,6 +388,7 @@ def confirm_exit_and_destroy():
 
     try:
         workspace.flush_edits()
+        workspace.hand_edits.flush()
     except Exception as e:
         logger.exception(f"Error flushing edits before exit: {e}")
 
@@ -1663,7 +1665,8 @@ def process_chunk(chunk):
         "Here is the conversation:\n"
     )
     # Send the prompt and chunk to the LLM for evaluation
-    prescreen = send_text_to_chatgpt(f"{prompt}{chunk}")
+    with activity_log.purpose("Checking the text is a medical visit"):
+        prescreen = send_text_to_chatgpt(f"{prompt}{chunk}")
     # Check if the response from the LLM is 'true' (case-insensitive)
     return prescreen.strip().lower() == "true"
 
@@ -1770,14 +1773,39 @@ def threaded_screen_input(user_message, screen_return):
     input_return = screen_input(user_message)
     screen_return.set(input_return)
 
-def send_text_to_chatgpt(edited_text, cancel_event=None): 
-    if app_settings.editable_settings[SettingsKeys.LOCAL_LLM.value]:
-        return send_text_to_localmodel(edited_text)
-    else:
-        # send_text_to_api is already synchronous and handles async internally
-        return send_text_to_api(edited_text, cancel_event)
+def send_text_to_chatgpt(edited_text, cancel_event=None):
+    """Every request to the AI goes through here, so this is where the activity log records it."""
+    started, reply, error = time.time(), "", ""
+    try:
+        if app_settings.editable_settings[SettingsKeys.LOCAL_LLM.value]:
+            reply = send_text_to_localmodel(edited_text)
+        else:
+            # send_text_to_api is already synchronous and handles async internally
+            reply = send_text_to_api(edited_text, cancel_event)
+        return reply
+    except Exception as e:
+        error = str(e)
+        raise
+    finally:
+        try:
+            text = reply if isinstance(reply, str) else ""
+            if not error and text and is_llm_error(text):
+                error = describe_llm_error(text)
+            activity_log.log.record_ai(edited_text, "" if error else text, time.time() - started, error)
+        except Exception:
+            pass
     
 def generate_note(formatted_message, cancel_event):
+    """Generate a note (the activity log labels its AI requests "Writing a note" with the template's name)."""
+    try:
+        template = generation_template or NoteStyleSelector.current_style
+    except Exception:
+        template = ""
+    with activity_log.purpose("Writing a note", template=template):
+        return _generate_note(formatted_message, cancel_event)
+
+
+def _generate_note(formatted_message, cancel_event):
     """Generate a note from the formatted message.
     
     This function processes the input text and generates a medical note or AI response
@@ -2009,7 +2037,7 @@ def generate_note_thread(text: str):
     root.after(500, lambda: check_thread_status(thread, loading_window))
 
 
-def run_llm_task(prompt_text, title, message, on_success):
+def run_llm_task(prompt_text, title, message, on_success, purpose=None, **details):
     """
     Sends a prompt to the model with the same safeguards as note generation
     (identifier scrubbing, optional review before sending, a cancellable progress
@@ -2024,7 +2052,8 @@ def run_llm_task(prompt_text, title, message, on_success):
 
     def start(text):
         start_flashing(title)
-        threading.Thread(target=_llm_task_thread, args=(text, title, message, on_success), daemon=True).start()
+        threading.Thread(target=_llm_task_thread, args=(text, title, message, on_success, purpose or title, details),
+                         daemon=True).start()
 
     if needs_phi_review():
         ScrubWindow(root, cleaned_prompt, start, stop_flashing)
@@ -2032,7 +2061,7 @@ def run_llm_task(prompt_text, title, message, on_success):
         start(cleaned_prompt)
 
 
-def _llm_task_thread(text, title, message, on_success):
+def _llm_task_thread(text, title, message, on_success, purpose=None, details=None):
     cancel_event = threading.Event()
     state = {"cancelled": False, "worker": None}
     result = {}
@@ -2054,7 +2083,8 @@ def _llm_task_thread(text, title, message, on_success):
 
     def work():
         try:
-            result["text"] = send_text_to_chatgpt(text, cancel_event)
+            with activity_log.purpose(purpose or title, **(details or {})):
+                result["text"] = send_text_to_chatgpt(text, cancel_event)
         except Exception as e:
             logger.exception(f"An error occurred: {e}")
             result["error"] = str(e)
@@ -2078,6 +2108,7 @@ def _llm_task_thread(text, title, message, on_success):
 
 def ask_assistant(instruction, target):
     """Asks the model to revise the note or document described by ``target``."""
+    workspace.hand_edits.flush()        # what was typed so far is logged before the AI changes it
     session = session_store.get(target.get("session_id"))
     prompt = compose_revision_prompt(
         instruction,
@@ -2086,12 +2117,13 @@ def ask_assistant(instruction, target):
         session.context if session else "")
 
     def on_success(text):
-        workspace.apply_revision(target, text)
+        workspace.apply_revision(target, text, instruction)
         if storing_notes_locally():
             save_notes_history()
 
     workspace.hide_warning(kind="error")
-    run_llm_task(prompt, "Updating", "Applying your request. Please wait.", on_success)
+    run_llm_task(prompt, "Updating", "Applying your request. Please wait.", on_success,
+                 purpose="Changing the note as asked", instruction=instruction)
 
 
 def generate_document(template_name):
@@ -2116,7 +2148,8 @@ def generate_document(template_name):
         workspace.toast(f"{title} created")
 
     workspace.hide_warning(kind="error")
-    run_llm_task(prompt, f"Creating {title}", f"Creating {title}. Please wait.", on_success)
+    run_llm_task(prompt, f"Creating {title}", f"Creating {title}. Please wait.", on_success,
+                 purpose="Writing a document", template=title)
 
 
 def form_source_budget():
@@ -2223,6 +2256,11 @@ def _ask_form_values(asked, source, mapping, form_title, cancel_event=None, prog
     Asks the model for ``asked`` fields from ``source``; returns ({field name: value}, problems).
     ``read_facts(text)`` reports progress while the visit's facts are read first.
     """
+    with activity_log.purpose("Filling a form", form=form_title):
+        return _ask_form_values_inner(asked, source, mapping, form_title, cancel_event, progress, read_facts)
+
+
+def _ask_form_values_inner(asked, source, mapping, form_title, cancel_event=None, progress=None, read_facts=None):
     values, problems = {}, []
     done = 0
     local = bool(app_settings.editable_settings.get(SettingsKeys.LOCAL_LLM.value, False))
@@ -2301,6 +2339,22 @@ def _fill_form_thread(prepared, asked, source, mapping, form_title, session_titl
     run_on_ui(_show_form_review, prepared, values, session_title, session_id)
 
 
+def _log_form_saved(path, window, session):
+    """The activity log keeps what was entered in a saved PDF form."""
+    try:
+        saved = getattr(window, "saved_values", {}) or {}
+        lines = []
+        for field in getattr(window, "fields", []):
+            value = saved.get(field.name, "")
+            if value:
+                lines.append(f"{field.label}: {value}")
+        activity_log.log.record("form", f"Saved PDF form {os.path.basename(path)}",
+                                session=(session.id, session.display_title) if session else ("", ""),
+                                text="\n".join(lines))
+    except Exception:
+        pass
+
+
 def _show_form_review(prepared, values, session_title, session_id=None, from_session=True):
     review = {}
     form_title = os.path.splitext(os.path.basename(prepared.original_path))[0]
@@ -2309,6 +2363,7 @@ def _show_form_review(prepared, values, session_title, session_id=None, from_ses
         workspace.toast(f"Saved {os.path.basename(path)}")
         session = session_store.get(session_id) if session_id else None
         window = review.get("window")
+        _log_form_saved(path, window, session)
         if session is None or window is None:
             return
         # The chat knows which forms were filled and with what
@@ -2559,7 +2614,8 @@ class TranslateBackend:
 
         def work():
             try:
-                reply = send_text_to_chatgpt(tr.translation_prompt(text, source, target))
+                with activity_log.purpose("Translation", session=("", "")):
+                    reply = send_text_to_chatgpt(tr.translation_prompt(text, source, target))
             except Exception as e:
                 logger.exception("Translation failed")
                 done(None, f"The AI could not be reached: {e}")
@@ -2591,7 +2647,8 @@ def tidy_dictation(text, done):
     def start(prompt_text):
         def work():
             try:
-                reply = send_text_to_chatgpt(tidy_prompt(prompt_text))
+                with activity_log.purpose("Tidying dictation", session=("", "")):
+                    reply = send_text_to_chatgpt(tidy_prompt(prompt_text))
             except Exception as e:
                 logger.exception(f"Tidying dictation failed: {e}")
                 done(None, f"The AI could not be reached: {e}")
@@ -2653,6 +2710,13 @@ def fill_web_form(payload, text, done):
                     logger.exception(f"Filling the web form failed: {e}")
                     fail(f"The form could not be filled: {e}")
                     return
+                try:
+                    activity_log.log.record(
+                        "form", f"Answers suggested for the eForm “{title}”",
+                        session=(session.id, session.display_title) if session else ("", ""),
+                        text="\n".join(f"{f.label}: {values.get(f.name, '')}" for f in fields if values.get(f.name)))
+                except Exception:
+                    pass
                 done(values, {f.name: f.label for f in fields}, problems,
                      {f.name: f.labels() for f in fields if f.kind in (form_filler.RADIO, form_filler.CHOICE)})
             threading.Thread(target=work, daemon=True).start()
@@ -2800,7 +2864,8 @@ def send_chat_message(session, text, oscar=False):
 
 def _chat_thread(session, prompt_text, mapping):
     try:
-        reply = send_text_to_chatgpt(prompt_text)
+        with activity_log.purpose("Chat about this visit", session=(session.id, session.display_title)):
+            reply = send_text_to_chatgpt(prompt_text)
         error = describe_llm_error(reply) if is_llm_error(reply) else None
     except Exception as e:
         logger.exception(f"Chat request failed: {e}")
@@ -3068,7 +3133,8 @@ def ask_oscar(session, question):
 def _oscar_sql_thread(session, question, prompt_text, mapping, counts_only=False):
     from services import oscar_query
     try:
-        reply = send_text_to_chatgpt(prompt_text)
+        with activity_log.purpose("Ask OSCAR records", session=(session.id, session.display_title)):
+            reply = send_text_to_chatgpt(prompt_text)
         error = describe_llm_error(reply) if is_llm_error(reply) else None
     except Exception as e:
         logger.exception(f"OSCAR query request failed: {e}")
@@ -3215,7 +3281,8 @@ eform_mapper_server = None
 def _ask_llm_for_tags(prompt):
     """The AI's suggestion of OSCAR tags for labels the rules can't settle (blank form labels, no patient data)."""
     try:
-        reply = send_text_to_chatgpt(prompt)
+        with activity_log.purpose("Suggesting eForm tags", session=("", "")):
+            reply = send_text_to_chatgpt(prompt)
     except Exception as e:
         logger.exception(f"eForm tag suggestion failed: {e}")
         return ""
@@ -3559,7 +3626,10 @@ def _extension_inserted(payload):
         raise ControlError("That session is not in FreeScribe any more.")
 
     def record():
-        session.record_insert(str(payload.get("chart", ""))[:120])
+        chart = str(payload.get("chart", ""))[:120]
+        activity_log.log.record("oscar", "Note put into OSCAR", session=(session.id, session.display_title),
+                                chart=chart, text=session.note)
+        session.record_insert(chart)
         workspace._touch(session)
         if storing_notes_locally():
             save_notes_history()
@@ -3663,6 +3733,8 @@ def start_extension_server():
         from services.voice_control import VoiceControl, VoiceError
         voice = VoiceControl(make_dictation=new_live_dictation, mic_busy=mic_busy_reason,
                              tidy=tidy_dictation, fill_form=fill_web_form)
+        voice.on_dictated = lambda text: activity_log.log.record(
+            "dictation", "Dictated through the Chrome extension", session=("", ""), text=text, source="extension")
         extension_server = ExtensionServer(
             port, code=_extension_code,
             get_routes={"/api/status": control.status, "/api/note": control.note},
@@ -3783,6 +3855,8 @@ workspace = Workspace(
         "debug_window": window.open_debug_window,
         "manage_recordings": window.open_recordings_manager,
         "manage_logs": window.open_log_window,
+        "open_activity_log": lambda: __import__("UI.ActivityLogWindow", fromlist=["x"]).ActivityLogWindow.show(
+            root, activity_log.log),
         "get_data_options": window.data_options,
         "get_status": get_model_status,
         "get_language": get_transcription_language,
@@ -3795,6 +3869,17 @@ workspace = Workspace(
 )
 window.attach_workspace(workspace)
 workspace.set_storage_mode(storing_notes_locally())
+
+
+def _open_session_info():
+    current = workspace.current
+    return (current.id, current.display_title) if current is not None else None
+
+
+# The activity log (File > Activity log…): encrypted with the same key as the saved sessions, off in the self-test
+activity_log.install(get_resource_path('activity_log.txt'), AESCryptoUtils.AESCryptoUtilsClass.encrypt,
+                     AESCryptoUtils.AESCryptoUtilsClass.decrypt, settings=ui_state, session_info=_open_session_info,
+                     suspended=bool(utils.arg_parser.args.self_test) or os.environ.get("FREESCRIBE_UNATTENDED") == "1")
 
 if app_settings.editable_settings["Use Docker Status Bar"]:
     window.create_docker_status_bar()

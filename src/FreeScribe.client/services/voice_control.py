@@ -53,6 +53,7 @@ class VoiceControl:
                  tidy: Callable[[str, Callable], None], fill_form: Callable[[dict, str, Callable], None],
                  idle_seconds: float = IDLE_SECONDS, check_every: float = 1.0):
         self.idle_seconds = idle_seconds
+        self.on_dictated = None            # called once with the text when a dictation has ended
         self.check_every = check_every
         self.make_dictation = make_dictation
         self.mic_busy = mic_busy
@@ -142,6 +143,13 @@ class VoiceControl:
             raise VoiceError("That dictation has ended.", "gone")
         entry["seen"] = time.monotonic()
         d = entry["d"]
+        if d.finished and not entry.get("reported"):
+            entry["reported"] = True
+            if self.on_dictated is not None and d.text.strip():
+                try:
+                    self.on_dictated(d.text.strip())
+                except Exception:
+                    pass
         return {
             "id": dictation_id,
             "pieces": [[n, text] for n, text in d.pieces(since)],
